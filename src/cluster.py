@@ -1,6 +1,7 @@
 
 import json
 import os
+import random
 import sys
 from typing import List
 from collections import Counter
@@ -51,7 +52,7 @@ def main():
     model.eval()
     tokenizer = AutoTokenizer.from_pretrained(LUAR_id)
     
-    num_trials = 100    # number of clustering trials
+    num_trials = 200    # number of clustering trials
     pred_majority, pred_largest_score, ground_truth = [], [], []
     
     if DEBUG:
@@ -78,7 +79,8 @@ def main():
                 embeddings, 
                 num_clusters=samples[i]["authors"], 
                 distance="cosine", 
-                device=device
+                device=device,
+                tqdm_flag=False,
             )
             author_partition = author_partition.cpu().numpy().tolist()
 
@@ -122,4 +124,5 @@ def main():
     return 0
 
 if __name__ == "__main__":
+    random.seed(43)
     sys.exit(main())
