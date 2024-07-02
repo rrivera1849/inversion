@@ -4,8 +4,9 @@ import os
 import random
 from argparse import ArgumentParser
 
+import torch
 from datasets import load_from_disk
-from llama import Llama
+from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from tqdm import tqdm
 
 from prompts import *
@@ -13,6 +14,9 @@ from prompts import *
 random.seed(43)
 
 parser = ArgumentParser()
+parser.add_argument("--model_name", type=str, default="google/gemma-7b-it",
+                    choices=["google/gemma-7b-it", "mistralai/Mistral-7B-Instruct-v0.3", "mistralai/Mixtral-8x7B-Instruct-v0.1"],
+                    help="Huggingface model name to use for generation.")
 parser.add_argument("--split", type=str, default="validation",
                     help="Dataset split to generate prompts for.")
 parser.add_argument("--prompt", type=str, default="rephrase",
@@ -39,22 +43,53 @@ DIRNAME = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128"
 DATASET = load_from_disk(f"{DIRNAME}/{args.split}")
 PROMPT = get_prompt(args.prompt)
 
-if args.prompt == "rephrase_with_context":
-    max_seq_len = 2048
-else:
-    max_seq_len = 1024
-
-generator = Llama.build(
-    ckpt_dir=LLAMA3_PATH,
-    tokenizer_path=os.path.join(LLAMA3_PATH, "tokenizer.model"),
-    max_seq_len=max_seq_len,
-    max_batch_size=args.gen_batch_size,
+model = AutoModelForCausalLM.from_pretrained(
+    args.model_name, 
+    device_map="auto", 
+    torch_dtype=torch.float16,
+    trust_remote_code=True,
 )
 
-dataset_name = "{}_prompt={}_temperature={}_top_p={}.jsonl".format(
-    args.split, args.prompt, args.temperature, args.top_p
+if "Mistral" in args.model_name.split('/')[1]:
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision="pr/51")
+    tokenizer.pad_token = tokenizer.eos_token
+elif "Mixtral" in args.model_name.split('/')[1]:
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+else:
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
+generation_config = GenerationConfig(
+    max_new_tokens=args.max_gen_len,
+    temperature=args.temperature,
+    do_sample=True,
+    top_p=args.top_p,
+)
+
+def get_generations(prompts):
+    """Returns a list of completions for the given prompts.
+    """
+    max_length = 2048 if args.prompt == "rephrase_with_context" else 1024
+    inputs = tokenizer(
+        prompts, 
+        max_length=max_length, 
+        padding=True, 
+        truncation=True,
+        return_tensors="pt", 
+    ).to("cuda")
+    
+    output = model.generate(**inputs, generation_config=generation_config)
+
+    generations = [
+        tokenizer.decode(output[i], skip_special_tokens=True)[len(prompts[i]):] for i in range(len(prompts))
+    ]
+    return generations
+
+dataset_name = "{}_{}_prompt={}_temperature={}_top_p={}.jsonl".format(
+    args.model_name.split("/")[1], args.split, args.prompt, args.temperature, args.top_p
 )
 savename = f"{DIRNAME}/generations/{dataset_name}"
+print(savename)
 if os.path.isfile(savename):
     fout = open(savename, "a+")
     last_index = json.loads(open(savename, "r").readlines()[-1])["dataset_index"] + 1
@@ -91,24 +126,17 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
             )
 
     # Generate Completions
-    all_results = []
-    for j in range(0, len(prompts), args.gen_batch_size):
-        results = generator.text_completion(
-            prompts[j:j+args.gen_batch_size],
-            max_gen_len=args.max_gen_len,
-            temperature=args.temperature,
-            top_p=args.top_p,
-        )
-        all_results.extend(results)
-        
+    generations = []
+    for j in tqdm(range(0, len(prompts), args.gen_batch_size)):
+        batch_generations = get_generations(prompts[j:j+args.gen_batch_size])
+        generations.extend(batch_generations)
         if args.debug:
-            for prompt, result in zip(prompts[j:j+args.max_gen_len], results):
+            for prompt, generation in zip(prompts[j:j+args.gen_batch_size], batch_generations):
                 print(prompt)
-                print("> {}".format(result["generation"]))
+                print("> {}".format(generation))
                 print("="*50)
                 print()
                 
-    generations = [result["generation"] for result in all_results]
     for j, length in enumerate(lengths[1:]):
         start = sum(lengths[:j+1])
         end = start + length
