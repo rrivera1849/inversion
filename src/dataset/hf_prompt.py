@@ -14,6 +14,9 @@ from prompts import *
 random.seed(43)
 
 parser = ArgumentParser()
+parser.add_argument("--dirname", type=str,
+                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    help="Directory where the dataset is stored.")
 parser.add_argument("--model_name", type=str, default="google/gemma-7b-it",
                     choices=["google/gemma-7b-it", "mistralai/Mistral-7B-Instruct-v0.3", "mistralai/Mixtral-8x7B-Instruct-v0.1"],
                     help="Huggingface model name to use for generation.")
@@ -37,9 +40,8 @@ parser.add_argument("--debug", action="store_true",
 args = parser.parse_args()
 
 os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
-LLAMA3_PATH = "/home/riverasoto1/repos/llama3/Meta-Llama-3-8B-Instruct"
 
-DIRNAME = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128"
+DIRNAME = args.dirname
 DATASET = load_from_disk(f"{DIRNAME}/{args.split}")
 PROMPT = get_prompt(args.prompt)
 
@@ -53,9 +55,11 @@ model = AutoModelForCausalLM.from_pretrained(
 if "Mistral" in args.model_name.split('/')[1]:
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision="pr/51")
     tokenizer.pad_token = tokenizer.eos_token
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
 elif "Mixtral" in args.model_name.split('/')[1]:
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     tokenizer.pad_token = tokenizer.eos_token
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
 else:
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
@@ -89,7 +93,6 @@ dataset_name = "{}_{}_prompt={}_temperature={}_top_p={}.jsonl".format(
     args.model_name.split("/")[1], args.split, args.prompt, args.temperature, args.top_p
 )
 savename = f"{DIRNAME}/generations/{dataset_name}"
-print(savename)
 if os.path.isfile(savename):
     fout = open(savename, "a+")
     last_index = json.loads(open(savename, "r").readlines()[-1])["dataset_index"] + 1
@@ -127,7 +130,7 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
 
     # Generate Completions
     generations = []
-    for j in tqdm(range(0, len(prompts), args.gen_batch_size)):
+    for j in range(0, len(prompts), args.gen_batch_size):
         batch_generations = get_generations(prompts[j:j+args.gen_batch_size])
         generations.extend(batch_generations)
         if args.debug:
