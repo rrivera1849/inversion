@@ -15,7 +15,7 @@ parser.add_argument("--split", type=str, default="validation",
 parser.add_argument("--prompt", type=str, default="rephrase",
                     choices=["rephrase", "rephrase_with_context", "continuation"],
                     help="Prompt type to use for generation")
-parser.add_argument("--example_batch_size", type=int, default=128,
+parser.add_argument("--example_batch_size", type=int, default=10,
                     help="Number of examples to generate prompts for at any given tim.")
 parser.add_argument("--gen_batch_size", type=int, default=128,
                     help="Number of examples to generate completions for at any given time.")
@@ -42,9 +42,6 @@ generator = Llama.build(
     max_seq_len=1024, # more than enough for our purposes
     max_batch_size=args.gen_batch_size,
 )
-
-if args.debug:
-    args.example_batch_size = 10
 
 dataset_name = "{}_prompt={}_temperature={}_top_p={}.jsonl".format(
     args.split, args.prompt, args.temperature, args.top_p
@@ -91,7 +88,7 @@ for i in tqdm(range(0, len(DATASET), args.example_batch_size)):
                 
     generations = [result["generation"] for result in all_results]
     for j, length in enumerate(lengths[1:]):
-        start = sum(lengths[:j])
+        start = sum(lengths[:j+1])
         end = start + length
         item = {
             "generations": generations[start:end],
