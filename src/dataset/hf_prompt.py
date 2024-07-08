@@ -41,7 +41,7 @@ parser.add_argument("--fall_back", default=False, action="store_true",
 parser.add_argument("--fall_back_num_tokens", type=int, default=450,
                     help="Number of tokens to fall back to.")
 parser.add_argument("--debug", action="store_true", 
-                    help="Enable debugging model.")
+                    help="Enable debugging mode.")
 args = parser.parse_args()
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -148,6 +148,10 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
             prompts.extend(
                 [PROMPT.format(example["units"][k-1], example["units"][k+1], example["units"][k]) 
                  for k in changepoint_indices]
+            )
+        elif args.prompt == "continuation":
+            prompts.extend(
+                [PROMPT.format(example["units"][k-1]) for k in changepoint_indices]
             )
         else:
             prompts.extend(
