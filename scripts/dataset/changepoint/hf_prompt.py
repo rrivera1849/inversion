@@ -19,7 +19,8 @@ parser.add_argument("--dirname", type=str,
                     help="Directory where the dataset is stored.")
 parser.add_argument("--model_name", type=str, default="google/gemma-7b-it",
                     choices=["google/gemma-7b-it", "mistralai/Mistral-7B-Instruct-v0.3", 
-                             "mistralai/Mixtral-8x7B-Instruct-v0.1", "meta-llama/Meta-Llama-3-8B-Instruct"],
+                             "mistralai/Mixtral-8x7B-Instruct-v0.1", "meta-llama/Meta-Llama-3-8B-Instruct",
+                             "microsoft/Phi-3-mini-4k-instruct"],
                     help="Huggingface model name to use for generation.")
 parser.add_argument("--split", type=str, default="validation",
                     help="Dataset split to generate prompts for.")
@@ -51,11 +52,13 @@ DIRNAME = args.dirname
 DATASET = load_from_disk(f"{DIRNAME}/{args.split}")
 PROMPT = get_prompt(args.prompt)
 
+attn_implementation = "flash_attention_2" if "Phi-3" in args.model_name else None
 model = AutoModelForCausalLM.from_pretrained(
     args.model_name, 
     device_map="auto", 
     torch_dtype=torch.float16,
     trust_remote_code=True,
+    attn_implementation=attn_implementation,
 )
 
 if "Mistral" in args.model_name.split('/')[1]:
@@ -107,8 +110,12 @@ def get_generations(prompts, sub_batch_size=1):
                 return_tensors="pt",
             ).to("cuda")
             output = model.generate(**inputs, generation_config=generation_config)
+
+            prompt_lengths = [len(prompt_batch[i]) for i in range(len(prompt_batch))]
+            if "Phi-3" in args.model_name:
+                prompt_lengths = [length - 32 for length in prompt_lengths]
             generations.extend([
-                tokenizer.decode(output[i], skip_special_tokens=True)[len(prompt_batch[i]):] 
+                tokenizer.decode(output[i], skip_special_tokens=True)[prompt_lengths[i]:] 
                 for i in range(len(prompt_batch))
             ])
 
@@ -157,6 +164,14 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
             prompts.extend(
                 [PROMPT.format(example["units"][k]) for k in changepoint_indices]
             )
+            
+    if "Phi-3" in args.model_name:
+        # https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
+        prompts = [
+            # "<|system|>\nYou are a helpful assistant.<|end|>\n<|user|>\n{}\n<|end|>\n<|assistant|>".format(prompt)
+            "<|user|>\n{}\n<|end|>\n<|assistant|>".format(prompt)
+            for prompt in prompts
+        ]
 
     # Generate Completions
     generations = []
