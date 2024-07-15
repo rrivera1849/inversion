@@ -30,6 +30,8 @@ parser.add_argument("--explore_num", type=int, default=50,
                     help="Number of generations to explore.")
 parser.add_argument("--explore_only", type=str, default=None,
                     help="Substring to search for in the filename to explore only those files.")
+parser.add_argument("--debug", default=False, action="store_true",
+                    help="Just process a small subset of the data.")
 args = parser.parse_args()
 
 NUM_STRINGS_REVERTED = 0
@@ -189,7 +191,8 @@ def clean_all_generations() -> List[pd.DataFrame]:
     for i, filename in enumerate(generation_filenames):
         print(colored("Reading: {}".format(os.path.basename(filename)), "cyan"))
         LLM = os.path.basename(filename).split("_")[0]
-        df = pd.read_json(filename, lines=True)
+        nrows = 1000 if args.debug else None
+        df = pd.read_json(filename, lines=True, nrows=nrows)
         df["generations"] = df.progress_apply(lambda row: clean_generation(row["generations"]), axis=1)
 
         for prompt in PROMPT_NAMES:
@@ -243,31 +246,31 @@ def get_columns_to_add(all_generations: List[pd.DataFrame]) \
     lengths = [len(v) for v in columns_to_add.values()]
     assert len(set(lengths)) == 1, "All columns should have the same length."
     
-    # this is a tricky bit of code that ensures that all the 
-    # changepoint indices are the same across all LLMs and prompts
-    changepoint_indices = []
-    changepoint_columns = [column for column in columns_to_add.keys() if "changepoint_indices" in column]
-    for i in range(lengths[0]):
-        all_changepoint_indices = [columns_to_add[column][i] for column in changepoint_columns]
-        # assert that all changepoint indices are the same
+    # # this is a tricky bit of code that ensures that all the 
+    # # changepoint indices are the same across all LLMs and prompts
+    # changepoint_indices = []
+    # changepoint_columns = [column for column in columns_to_add.keys() if "changepoint_indices" in column]
+    # for i in range(lengths[0]):
+    #     all_changepoint_indices = [columns_to_add[column][i] for column in changepoint_columns]
+    #     # assert that all changepoint indices are the same
         
-        intersection_of_indices = list(set.intersection(*[set(indices) for indices in all_changepoint_indices]))
-        if len(intersection_of_indices) != len(all_changepoint_indices[0]):
-            NUM_INTERSECTION_FAILED += 1
-            changepoint_indices.append(intersection_of_indices)
+    #     intersection_of_indices = list(set.intersection(*[set(indices) for indices in all_changepoint_indices]))
+    #     if len(intersection_of_indices) != len(all_changepoint_indices[0]):
+    #         NUM_INTERSECTION_FAILED += 1
+    #         changepoint_indices.append(intersection_of_indices)
 
-            for gkey, cpkey in generation_and_changepoint_keys:
-                generations = columns_to_add[gkey][i]
-                changepoints = columns_to_add[cpkey][i]
-                indices = [changepoints.index(index) for index in intersection_of_indices]
-                columns_to_add[gkey][i] = [generations[index] for index in indices]
-                columns_to_add[cpkey][i] = intersection_of_indices
-        else:
-            changepoint_indices.append(all_changepoint_indices[0])
+    #         for gkey, cpkey in generation_and_changepoint_keys:
+    #             generations = columns_to_add[gkey][i]
+    #             changepoints = columns_to_add[cpkey][i]
+    #             indices = [changepoints.index(index) for index in intersection_of_indices]
+    #             columns_to_add[gkey][i] = [generations[index] for index in indices]
+    #             columns_to_add[cpkey][i] = intersection_of_indices
+    #     else:
+    #         changepoint_indices.append(all_changepoint_indices[0])
 
-    for column in changepoint_columns:
-        del columns_to_add[column]
-    columns_to_add["changepoint_indices"] = changepoint_indices
+    # for column in changepoint_columns:
+    #     del columns_to_add[column]
+    # columns_to_add["changepoint_indices"] = changepoint_indices
 
     return columns_to_add
 
@@ -294,8 +297,8 @@ def main():
     # calculate #token overlap between generations and original
 
     save_dirname = split_dirname + "_clean_and_joined"
+    save_dirname += "_debug" if args.debug else ""
     dataset.save_to_disk(save_dirname)
-
     metadata = {
         "NUM_STRINGS_REVERTED": NUM_STRINGS_REVERTED,
         "NUM_INTERSECTION_FAILED": NUM_INTERSECTION_FAILED

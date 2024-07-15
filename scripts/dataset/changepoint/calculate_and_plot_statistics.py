@@ -59,6 +59,8 @@ def main():
     for i in range(len(N)):
         for prompt in PROMPT_NAMES:
             for model_name in MODEL_NAMES:
+                import pdb; pdb.set_trace()
+                model_name = model_name.split("/")[1]
                 generations_key = f"{model_name}_prompt={prompt}_generations"
                 changepoints_key = f"{model_name}_prompt={prompt}_changepoint_indices"
 
