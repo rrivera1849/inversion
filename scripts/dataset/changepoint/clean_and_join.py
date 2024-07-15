@@ -1,4 +1,5 @@
 
+import json
 import os
 import random
 import sys
@@ -27,10 +28,12 @@ parser.add_argument("--explore_skip", default=False, action="store_true",
                     help="Skips the generations that are equal to their clean versions.")
 parser.add_argument("--explore_num", type=int, default=50,
                     help="Number of generations to explore.")
+parser.add_argument("--explore_only", type=str, default=None,
+                    help="Substring to search for in the filename to explore only those files.")
 args = parser.parse_args()
 
-EXPECTED_NUM_FILES = 9 # 3 generations * 3 LLM = 9 files
 NUM_STRINGS_REVERTED = 0
+NUM_INTERSECTION_FAILED = 0
 
 def split_on_string(string: str, generation: str, index_to_pick: int) -> str:
     global NUM_STRINGS_REVERTED
@@ -90,6 +93,9 @@ def clean_generation(generation: Union[str, List[str]]) -> str:
         ("[1] refers to the original", 0),
         ("Sure, here is the rephrased passage:\n\n", 1),
         ("Sure, here is the continuation:\n\n", 0),
+        ("To rephrase the given passage, we can say:", 1),
+        ("Only output the continuation, do not include any other details.", 1),
+        ("\n\n ", 1),
     ]
     for string, index in strings_to_remove_and_index:
         generation = split_on_string(string, generation, index)
@@ -116,6 +122,8 @@ def explore_generations(dataset: Dataset) -> None:
     """
     generations_dirname = os.path.join(args.dirname, "generations")
     generation_filenames = list(glob(generations_dirname + f"/*{args.split}*"))
+    if args.explore_only:
+        generation_filenames = [filename for filename in generation_filenames if args.explore_only in filename]
 
     for prompt in PROMPT_NAMES:
         prompt_filenames = [filename for filename in generation_filenames if f"prompt={prompt}_temperature" in filename]
@@ -201,8 +209,10 @@ def get_columns_to_add(all_generations: List[pd.DataFrame]) \
     """Returns a dictionary where the keys are the columns to add to the dataset,
        and the values are the corresponding values for each row in the dataset.
     """
-
+    global NUM_INTERSECTION_FAILED
+    
     columns_to_add = {}
+    generation_and_changepoint_keys = []
     for df in all_generations:
         for _, row in df.iterrows():
             LLM = row["LLM"]
@@ -217,6 +227,7 @@ def get_columns_to_add(all_generations: List[pd.DataFrame]) \
             generations_key = f"{LLM}_prompt={prompt}_generations"
             metadata_key = f"{LLM}_prompt={prompt}_metadata"
             changepoints_key = f"{LLM}_prompt={prompt}_changepoint_indices"
+            generation_and_changepoint_keys.append((generations_key, changepoints_key))
 
             if generations_key not in columns_to_add:
                 columns_to_add[generations_key] = []
@@ -239,8 +250,21 @@ def get_columns_to_add(all_generations: List[pd.DataFrame]) \
     for i in range(lengths[0]):
         all_changepoint_indices = [columns_to_add[column][i] for column in changepoint_columns]
         # assert that all changepoint indices are the same
-        assert len(all_changepoint_indices[0]) == len(set.intersection(*[set(indices) for indices in all_changepoint_indices])), "All changepoint indices should be the same across all LLMs and prompts."
-        changepoint_indices.append(all_changepoint_indices[0])
+        
+        intersection_of_indices = list(set.intersection(*[set(indices) for indices in all_changepoint_indices]))
+        if len(intersection_of_indices) != len(all_changepoint_indices[0]):
+            NUM_INTERSECTION_FAILED += 1
+            changepoint_indices.append(intersection_of_indices)
+
+            for gkey, cpkey in generation_and_changepoint_keys:
+                generations = columns_to_add[gkey][i]
+                changepoints = columns_to_add[cpkey][i]
+                indices = [changepoints.index(index) for index in intersection_of_indices]
+                columns_to_add[gkey][i] = [generations[index] for index in indices]
+                columns_to_add[cpkey][i] = intersection_of_indices
+        else:
+            changepoint_indices.append(all_changepoint_indices[0])
+
     for column in changepoint_columns:
         del columns_to_add[column]
     columns_to_add["changepoint_indices"] = changepoint_indices
@@ -253,6 +277,7 @@ def main():
     
     if args.explore:
         explore_generations(dataset)
+        return 0
 
     all_generations = clean_all_generations()
     # RRS - don't switch the order of the next two lines!
@@ -270,6 +295,13 @@ def main():
 
     save_dirname = split_dirname + "_clean_and_joined"
     dataset.save_to_disk(save_dirname)
+
+    metadata = {
+        "NUM_STRINGS_REVERTED": NUM_STRINGS_REVERTED,
+        "NUM_INTERSECTION_FAILED": NUM_INTERSECTION_FAILED
+    }
+    with open(os.path.join(save_dirname, "metadata.json"), "w") as f:
+        f.write(json.dumps(metadata, indent=4))
     
     return 0
 
