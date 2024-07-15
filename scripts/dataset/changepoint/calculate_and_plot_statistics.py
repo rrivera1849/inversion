@@ -2,11 +2,14 @@
 import os
 import sys
 from argparse import ArgumentParser
-from typing import Dict, Union
+from itertools import product
+from multiprocessing import Pool
+from typing import Any, Dict, List, Union
 
 import matplotlib.pyplot as plt
 from datasets import load_from_disk
 from transformers import AutoTokenizer
+from tqdm import tqdm
 
 from prompts import PROMPT_NAMES
 
@@ -29,6 +32,7 @@ TOKENIZERS = {}
 for model_name in MODEL_NAMES:
     TOKENIZERS[model_name.split("/")[1]] = \
         AutoTokenizer.from_pretrained(model_name)
+MODEL_NAMES = [model_name.split("/")[1] for model_name in MODEL_NAMES]
 
 def calculate_statistics(
     unit_reference: str, 
@@ -50,32 +54,49 @@ def calculate_statistics(
 
     return statistics
 
+def gather_statistics_for_elem(
+    dataset_elem: Dict[str, Any], 
+    prompt: str, 
+    model_name: str, 
+    generations_key: str, 
+    changepoints_key: str
+) -> List[Dict[str, Union[int, float]]]:
+    statistics = []
+    for j, generation in enumerate(dataset_elem[generations_key]):
+        unit_index = dataset_elem[changepoints_key][j]
+        if prompt == "continuation":
+            unit_index -= 1
+                        
+        reference = dataset_elem["units"][unit_index]
+        statistics.append(calculate_statistics(reference, generation, model_name))
+    return statistics
+
 def main():
     dataset = load_from_disk(f"{args.dirname}/{args.split}")
     N = 100 if args.debug else len(dataset)
 
-    statistics = {(prompt, model_name): [] for prompt, model_name in zip(PROMPT_NAMES, MODEL_NAMES)}
-
-    for i in range(len(N)):
+    print("Gathering arguments for pool.starmap")
+    arguments = []
+    for i in tqdm(range(N)):
         for prompt in PROMPT_NAMES:
             for model_name in MODEL_NAMES:
-                import pdb; pdb.set_trace()
-                model_name = model_name.split("/")[1]
                 generations_key = f"{model_name}_prompt={prompt}_generations"
                 changepoints_key = f"{model_name}_prompt={prompt}_changepoint_indices"
-
-                for j, generation in enumerate(dataset[i][generations_key]):
-                    unit_index = dataset[i][changepoints_key][j]
-                    if prompt == "continuation":
-                        unit_index -= 1
-                        
-                    reference = dataset[i]["units"][unit_index]
-                    statistics[(prompt, model_name)].append(
-                        calculate_statistics(reference, generation, model_name)
-                    )
-
-    os.makedirs("./statistics", exist_ok=True)
+                arguments.append((dataset[i], prompt, model_name, generations_key, changepoints_key))
     
+    print("Computing statistics")
+    with Pool(40) as pool:
+        pool_results = pool.starmap(gather_statistics_for_elem, arguments)
+    statistics = {(prompt, model_name): [] for prompt, model_name in list(product(PROMPT_NAMES, MODEL_NAMES))}
+    index = 0
+    for _ in range(N):
+        for prompt in PROMPT_NAMES:
+            for model_name in MODEL_NAMES:
+                statistics[(prompt, model_name)].extend(pool_results[index])
+                index += 1
+
+    print("Plotting time!")
+    os.makedirs("./statistics", exist_ok=True)
     for (prompt, model_name), stats in statistics.items():
         token_overlap = [stat["token_overlap"] for stat in stats]
         length_difference = [stat["length_difference"] for stat in stats]

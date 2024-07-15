@@ -4,6 +4,7 @@ import sys
 from argparse import ArgumentParser
 
 import numpy as np
+import pandas as pd
 from datasets import Dataset, load_from_disk
 
 sys.path.append("../changepoint")
@@ -15,6 +16,8 @@ parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
                     default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
+parser.add_argument("--debug", default=False, action="store_true",
+                    help="Work on the debug split.")
 args = parser.parse_args()
 
 MODEL_NAMES = [
@@ -25,7 +28,8 @@ MODEL_NAMES = [
 
 def main():
     N = 1000 # 1000 per LLM per prompt, equal amount of humans
-    split = "test_and_joined"
+    split = "test_clean_and_joined"
+    split += "_debug" if args.debug else ""
     dataset = load_from_disk(os.path.join(args.dirname, split))
     indices = np.random.permutation(len(dataset))[:N].tolist()
 
@@ -56,7 +60,8 @@ def main():
                     "model": model_name,
                 })
     
-    MTD_dataset = Dataset.from_dict(records)
+    records_df = pd.DataFrame(records)
+    MTD_dataset = Dataset.from_pandas(records_df)
     MTD_dataset.save_to_disk(os.path.join(args.dirname, "MTD_dataset"))
 
     return 0
