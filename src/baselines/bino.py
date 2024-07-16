@@ -41,7 +41,10 @@ def get_bino_scores(
 ) -> list[float]:
     """Compute Bino scores for a list of text
     """
-    bino = Binoculars()
+    bino = Binoculars(
+        observer_name_or_path="tiiuae/falcon-7b",
+        performer_name_or_path="tiiuae/falcon-7b-instruct",
+    )
     scores = []
     for i in tqdm(range(0, len(text), batch_size)):
         batch = text[i:i+batch_size]
