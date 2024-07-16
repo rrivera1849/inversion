@@ -64,8 +64,8 @@ def gather_statistics_for_elem(
     statistics = []
     for j, generation in enumerate(dataset_elem[generations_key]):
         unit_index = dataset_elem[changepoints_key][j]
-        if prompt == "continuation":
-            unit_index -= 1
+        # if prompt == "continuation":
+        #     unit_index -= 1
                         
         reference = dataset_elem["units"][unit_index]
         statistics.append(calculate_statistics(reference, generation, model_name))
@@ -73,7 +73,7 @@ def gather_statistics_for_elem(
 
 def main():
     dataset = load_from_disk(f"{args.dirname}/{args.split}")
-    N = 100 if args.debug else len(dataset)
+    N = 100 if args.debug else 10_000
 
     print("Gathering arguments for pool.starmap")
     arguments = []
@@ -126,5 +126,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
