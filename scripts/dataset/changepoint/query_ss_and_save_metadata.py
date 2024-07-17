@@ -59,7 +59,12 @@ def main():
     print(colored("last_index=", "green"), last_index)
     for i in tqdm(range(last_index, last_index+N)):
         corpus_id = dataset[i]["id"]
-        paper_metadata = get_paper_data(corpus_id)
+
+        try:
+            paper_metadata = get_paper_data(corpus_id)
+        except:
+            sleep(10)
+            paper_metadata = get_paper_data(corpus_id)
 
         record = {}
         record["index"] = i
