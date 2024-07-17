@@ -98,6 +98,7 @@ def clean_generation(generation: Union[str, List[str]]) -> str:
         ("To rephrase the given passage, we can say:", 1),
         ("Only output the continuation, do not include any other details.", 1),
         ("\n\n ", 1),
+        ("\n ", 1)
     ]
     for string, index in strings_to_remove_and_index:
         generation = split_on_string(string, generation, index)

@@ -5,6 +5,7 @@ import sys
 import random
 from argparse import ArgumentParser
 
+import pandas as pd
 import torch
 from datasets import load_from_disk
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
@@ -12,12 +13,13 @@ from tqdm import tqdm
 
 sys.path.append("../changepoint")
 from prompts import *
+from clean_and_join import clean_generation   
 
 random.seed(43)
 parser = ArgumentParser()
-parser.add_argument("--text_file", type=str, default=None, required=True,
-                    help="File of text samples for which to get rephrased prompts"
-                         " to use as hard negatives.")
+parser.add_argument("--cisr_file", type=str, 
+                    default="/home/riverasoto1/repos/Style-Embeddings/Data/train_data/train-210000__subreddits-100-2018_tasks-300000__topic-variable-random.tsv", 
+                    help="CISR training file for which to get prompted hard negatives from.")
 parser.add_argument("--gen_batch_size", type=int, default=128,
                     help="Number of examples to generate completions for at any given time.")
 parser.add_argument("--max_gen_len", type=int, default=128+32,
@@ -37,18 +39,16 @@ args = parser.parse_args()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
 
-PROMPT = get_prompt("rephrase")
+PROMPT = "Paraphrase: {}\nResult: "
 
 model = AutoModelForCausalLM.from_pretrained(
-    "meta-llama/Meta-Llama-3-8B-Instruct", 
+    "microsoft/Phi-3-mini-4k-instruct", 
     device_map="auto", 
     torch_dtype=torch.float16,
     trust_remote_code=True,
+    attn_implementation="flash_attention_2",
 )
-
-tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side="left")
-tokenizer.pad_token = tokenizer.eos_token
-model.generation_config.pad_token_id = tokenizer.pad_token_id
+tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-4k-instruct")
 
 generation_config = GenerationConfig(
     max_new_tokens=args.max_gen_len,
@@ -64,7 +64,7 @@ def get_generations(prompts, sub_batch_size=1):
     """Returns a list of completions for the given prompts.
     """
     with torch.inference_mode():
-        max_length = 2048 if args.prompt == "rephrase_with_context" else 1024
+        max_length = 1024
 
         generations = []
         num_tokens = [count_num_tokens(prompt) for prompt in prompts]
@@ -85,14 +85,37 @@ def get_generations(prompts, sub_batch_size=1):
             ).to("cuda")
             output = model.generate(**inputs, generation_config=generation_config)
 
-            prompt_lengths = [len(prompt_batch[i]) for i in range(len(prompt_batch))]
-            if "Phi-3" in args.model_name:
-                prompt_lengths = [length - 32 for length in prompt_lengths]
             generations.extend([
-                tokenizer.decode(output[i], skip_special_tokens=True)[prompt_lengths[i]:] 
+                tokenizer.decode(output[i], skip_special_tokens=True)
                 for i in range(len(prompt_batch))
             ])
 
+    generations = [
+        gen[gen.index("Result: ")+len("Result: "):]
+        for gen in generations
+    ]
     assert len(generations) == sum(len(prompt_batch) for prompt_batch in prompts)
     return generations
 
+nrows = 100 if args.debug else None
+df = pd.read_csv(args.cisr_file, nrows=nrows, delimiter="\t")
+df = df[(df["Anchor (A)"].isna() | df["Utterance 1 (U1)"] | df["Utterance 2 (U2)"].isna())]
+
+prompts = []
+for text in df["Anchor (A)"]:
+    prompts.append(PROMPT.format(text))
+# https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
+prompts = [
+    # "<|system|>\nYou are a helpful assistant.<|end|>\n<|user|>\n{}\n<|end|>\n<|assistant|>".format(prompt)
+    "<|user|>\n{}\n<|end|>\n<|assistant|>".format(prompt)
+    for prompt in prompts
+]
+
+for i in tqdm(range(0, len(prompts), args.gen_batch_size)):
+    generations = get_generations(prompts[i:i+args.gen_batch_size])
+    for j, generation in enumerate(generations):
+        df.loc[i+j, "Hard Negative"] = clean_generation(generation)
+
+savename = "-".join(args.cisr_file.split("-")[:-1])
+savename += "-paraphrase.tsv"
+df.to_csv(savename, sep="\t", index=False)
