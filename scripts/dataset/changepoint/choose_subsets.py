@@ -50,10 +50,7 @@ def main():
             num_proc=40,
         )
     else:
-        test_changepoint = dataset["test"].filter(
-            lambda example: "s2orc" in example["source"],
-            num_proc=40,
-        )
+        test_changepoint = None
 
     if args.metadata_file is not None:
         metadata = pickle.load(open(args.metadata_file, "rb"))
@@ -78,6 +75,7 @@ def main():
     }.items():
         if data is None:
             continue
+        
         assert len(data) == {
             "train": args.ntrain,
             "validation": args.nval,
