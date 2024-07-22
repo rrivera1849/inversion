@@ -123,7 +123,7 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             N = int(args.units_perc_per_sample * len(dataset[i][key]))
             text.extend(random.sample(dataset[i][key], k=N))
             
-    train_size = int(len(text) * 0.8)
+    train_size = int(len(text) * 0.9)
     train_text = text[:train_size]
     test_text = text[train_size:]
     
@@ -148,11 +148,13 @@ def main():
     print(colored(f"len(test_samples)={len(test_samples)}", "blue"))
     
     run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-debug={args.debug}"
+    output_dir = os.path.join("/scratch1/yubnub/changepoint/output", run_name)
+    os.makedirs(output_dir, exist_ok=True)
 
     training_args = TrainingArguments(
         report_to="mlflow",
-        run_name=f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-debug={args.debug}",
-        output_dir="/scratch1/yubnub/changepoint/output",
+        run_name=run_name,
+        output_dir=output_dir,
         per_device_train_batch_size=128,
         gradient_accumulation_steps=2,
         gradient_checkpointing=True,
@@ -161,9 +163,9 @@ def main():
         learning_rate=2e-5,
         lr_scheduler_type="constant",
         max_steps=1000,
-        save_steps=5,
-        logging_steps=5,
-        warmup_steps=50,
+        save_steps=100,
+        logging_steps=100,
+        warmup_steps=10,
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
     )
@@ -174,13 +176,13 @@ def main():
         data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
         args=training_args,
     )
-
     # use_cache=True is incompatible with gradient checkpointing.
     peft_model.config.use_cache = False
     
     trainer.train()
     
-    return 0
+    test_metrics = trainer.evaluate(test_samples)
+    print(test_metrics)
 
 if __name__ == "__main__":
     sys.exit(main())
