@@ -36,6 +36,9 @@ parser.add_argument("--dirname", type=str,
 parser.add_argument("--prompt", type=str, default="none",
                     choices=PROMPT_NAMES + ["none", "all"],
                     help="Which prompt-type to train on. If 'all', will train a single model on all types.")
+
+parser.add_argument("--num_samples", type=int, default=100_000,
+                    help="Number of samples to draw from the dataset in total.")
 parser.add_argument("--units_perc_per_sample", type=float, default=0.10,
                     help="Percentage of units to take from each paper when creating the dataset.")
 
@@ -123,6 +126,7 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             N = int(args.units_perc_per_sample * len(dataset[i][key]))
             text.extend(random.sample(dataset[i][key], k=N))
             
+    text = text[:args.num_samples]
     train_size = int(len(text) * 0.9)
     train_text = text[:train_size]
     test_text = text[train_size:]
@@ -147,7 +151,7 @@ def main():
     print(colored(f"len(train_samples)={len(train_samples)}", "blue"))
     print(colored(f"len(test_samples)={len(test_samples)}", "blue"))
     
-    run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-debug={args.debug}"
+    run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-ns={args.num_samples}-debug={args.debug}"
     output_dir = os.path.join("/scratch1/yubnub/changepoint/output", run_name)
     os.makedirs(output_dir, exist_ok=True)
 
