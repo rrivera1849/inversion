@@ -1,70 +1,61 @@
 
+import json
 import os
-import pickle
 import random
 import sys
 from argparse import ArgumentParser
-from tqdm import tqdm
 
-from datasets import load_dataset
+from datasets import load_from_disk
+from tqdm import tqdm
 
 random.seed(43)
 
 parser = ArgumentParser()
-parser.add_argument("--metadata_file", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/base/metadata.pkl",
-                    help="Path to the metadata file where the indices are stored.")
-parser.add_argument("--cache_dir", type=str, 
-                    default="/data1/yubnub/changepoint/allenai/peS2o/",
-                    help="Path to the HuggingFace datasets cache directory.")
-parser.add_argument("--num_train", type=int, default=1_000_000,
-                    help="Number of research papers to use for training.")
-parser.add_argument("--num_val", type=int, default=5_000,
-                    help="Number of research papers to use for validation.")
-parser.add_argument("--num_test", type=int, default=10_000,
-                    help="Number of research papers to use for testing.")
 parser.add_argument("--debug", default=False, action="store_true",
                     help="Debug mode, runs in a small subset of data.")
 args = parser.parse_args()
 
 def split_queries_and_targets(
     text: list[str],
-    E: int = 16,
 ):
-    assert len(text) >= 2*E
     random.shuffle(text)
-    queries = text[:E]
-    targets = text[E:2*E]
+    queries = text[:len(text)//2]
+    targets = text[len(text)//2:]
 
     return queries, targets
 
 def main():
-    metadata = pickle.load(open(args.metadata_file, "rb"))
-    used_train_indices = metadata["train_indices"]
+    # TODO
+    path = "/data1/yubnub/changepoint/s2orc_changepoint/author_unit_128"
+    save_dirname = "/data1/yubnub/data/s2orc/"
+    os.makedirs(save_dirname, exist_ok=True)
     
-    dataset = load_dataset("allenai/peS2o", cache_dir=args.cache_dir)
-    N = 1000 if args.debug else args.num_train + args.num_val + args.num_test
+    dataset = load_from_disk(os.path.join(path, "train"))
 
-    import pdb; pdb.set_trace()
-
-    samples = []
-    pbar = tqdm(total=N)
-    for i in reversed(range(len(dataset["train"]))):
-        if i in used_train_indices:
-            continue
-        
-        if dataset["train"][i]["source"] != "s2orc/train":
-            continue
-        
-        sample = dataset["train"][i]
-        samples.append(sample)
-        pbar.update(1)
-        
-        if len(samples) >= N:
+    train_fout = open(os.path.join(save_dirname, "train.jsonl"), "w+")
+    for i in tqdm(range(len(dataset))):
+        record = {}
+        record["author_id"] = dataset[i]["id"]
+        record["syms"] = dataset[i]["units"]
+        train_fout.write(json.dumps(record)); train_fout.write('\n')
+        if args.debug and i >= 99:
             break
-
-    import pdb; pdb.set_trace()
-
+    train_fout.close()
+    
+    dataset = load_from_disk(os.path.join(path, "validation"))
+    validation_queries_fout = open(os.path.join(save_dirname, "validation_queries.jsonl"), "w+")
+    validation_targets_fout = open(os.path.join(save_dirname, "validation_targets.jsonl"), "w+")
+    for i in tqdm(range(len(dataset))):
+        record = {}
+        record["author_id"] = dataset[i]["id"]
+        queries, targets = split_queries_and_targets(dataset[i]["units"])
+        record["syms"] = queries
+        validation_queries_fout.write(json.dumps(record)); validation_queries_fout.write('\n')
+        record["syms"] = targets
+        validation_targets_fout.write(json.dumps(record)); validation_targets_fout.write('\n')
+        if args.debug and i >= 99:
+            break
+    validation_queries_fout.close(); validation_targets_fout.close()
 
     return 0
 

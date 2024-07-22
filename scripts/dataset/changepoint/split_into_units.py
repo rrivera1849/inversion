@@ -12,13 +12,13 @@ from transformers import AutoTokenizer
 random.seed(43)
 
 parser = ArgumentParser()
-parser.add_argument("--num_max_tokens", type=int, default=64)
+parser.add_argument("--num_max_tokens", type=int, default=128)
 args = parser.parse_args()
 
 NLP = spacy.load("en_core_web_sm", disable=["tagger", "attribute_ruler", "lemmatizer", "ner"])
 TOKENIZER = AutoTokenizer.from_pretrained("roberta-base")
 
-def split_into_units(example, num_max_tokens: int = 64):
+def split_into_units(example, num_max_tokens: int = 128):
     """We make our best effort at splitting text into "units" that are at most 
        `num_max_tokens` long contiguous complete sentences. 
 
@@ -117,11 +117,16 @@ def get_unit_text(
     return units
 
 def main():
-    save_dir = f"/data1/yubnub/changepoint/s2orc_changepoint/unit_{args.num_max_tokens}"
+    print("BE CAREFUL MAN, THERE ARE SOME CRAZY VARS HERE FIX LATER")
+    
+    # TODO
+    save_dir = f"/data1/yubnub/changepoint/s2orc_changepoint/author_unit_{args.num_max_tokens}"
     os.makedirs(save_dir, exist_ok=True)
-    for split in ["validation", "test", "train"]:
+    # for split in ["validation", "test", "train"]:
+    for split in ["validation", "train"]:
         print(f"Processing {split}...")
-        changepoint = load_from_disk(f"/data1/yubnub/changepoint/s2orc_changepoint/base/{split}")
+        path = f"/data1/yubnub/changepoint/s2orc_changepoint/base_author/{split}"
+        changepoint = load_from_disk(path)
         split_fn = partial(split_into_units, num_max_tokens=args.num_max_tokens)
         changepoint = changepoint.map(split_fn, num_proc=40)
         changepoint.save_to_disk(f"{save_dir}/{split}")

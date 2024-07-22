@@ -57,7 +57,7 @@ def main():
         last_index = 0
 
     print(colored("last_index=", "green"), last_index)
-    for i in tqdm(range(last_index, last_index+N)):
+    for i in tqdm(range(last_index, min(last_index+N, len(dataset)))):
         corpus_id = dataset[i]["id"]
 
         try:

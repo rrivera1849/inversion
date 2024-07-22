@@ -5,13 +5,14 @@ from argparse import ArgumentParser
 from collections import Counter
 from typing import Union
 
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from binoculars import Binoculars
 from datasets import load_from_disk
 from sklearn.metrics import roc_auc_score
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 from termcolor import colored
 from tqdm import tqdm
 
@@ -22,6 +23,10 @@ parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
                     default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
+parser.add_argument("--M4_dataset_subset", type=str, default=None,
+                    choices=["arxiv", "peerread", "reddit", "wikipedia", "wikihow"],
+                    help="If provided, will use the M4 dataset.")
+parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--debug", default=False, action="store_true",
                     help="If True, will process only a few samples.")
 args = parser.parse_args()
@@ -34,6 +39,36 @@ MODEL_NAMES = [
     "Meta-Llama-3-8B-Instruct",
     "Phi-3-mini-4k-instruct"
 ]
+
+def get_rank(text, base_model, base_tokenizer, log=False, prompt=None):
+    """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L298C1-L320C43
+    """
+    with torch.no_grad():
+        tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
+        logits = base_model(**tokenized).logits[:,:-1]
+        labels = tokenized["input_ids"][:,1:]
+
+        if prompt is not None:
+            prompt_tokens = base_tokenizer(prompt, return_tensors="pt")
+            prompt_length = prompt_tokens["input_ids"].shape[1] - 1
+            logits = logits[:, prompt_length:]
+            labels = labels[:, prompt_length:]
+
+        # get rank of each label token in the model's likelihood ordering
+        matches = (logits.argsort(-1, descending=True) == labels.unsqueeze(-1)).nonzero()
+
+        assert matches.shape[1] == 3, f"Expected 3 dimensions in matches tensor, got {matches.shape}"
+
+        ranks, timesteps = matches[:,-1], matches[:,-2]
+
+        # make sure we got exactly one match for each timestep in the sequence
+        assert (timesteps == torch.arange(len(timesteps)).to(timesteps.device)).all(), "Expected one match per timestep"
+
+        ranks = ranks.float() + 1 # convert to 1-indexed rank
+        if log:
+            ranks = torch.log(ranks)
+
+        return ranks.float().mean().item()
 
 def get_bino_scores(
     text: list[str],
@@ -51,6 +86,37 @@ def get_bino_scores(
         scores += bino.compute_score(batch)
     return scores
 
+def get_logrank_scores(
+    text: list[str],
+    model_id: str ="openai-community/gpt2-xl",
+    prompts: list[str] = None,
+) -> list[float]:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # model = AutoModelForCausalLM.from_pretrained(model_id)
+    # model.to(device)
+    # model.eval()
+    # tokenizer = AutoTokenizer.from_pretrained(model_id)
+    print("LOADING LLAMA")
+    model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, 
+        device_map="auto", 
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    scores = []
+    for i in tqdm(range(len(text))):
+        try:
+            prompt = None if prompts is None else prompts[i]
+            scores.append(get_rank(text[i], model, tokenizer, log=True, prompt=prompt))
+        except:
+            scores.append(None)
+
+    return scores
+
 @torch.no_grad()
 def get_LUAR_scores(
     text: list[str],
@@ -59,7 +125,8 @@ def get_LUAR_scores(
 ) -> list[float]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    HF_id = "rrivera1849/LUAR-MUD"
+    # HF_id = "rrivera1849/LUAR-MUD"
+    HF_id = "/data1/yubnub/pretrained_weights/LUAR/S2ORC_baseline_fast"
     model = AutoModel.from_pretrained(HF_id, trust_remote_code=True).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(HF_id)
 
@@ -110,24 +177,60 @@ def compute_metrics(
 
     machine_scores = [score for i, score in enumerate(scores) if models[i] != "human"]
     labels = [0] * len(human_scores) + [1] * len(machine_scores)
-    roc_auc = roc_auc_score(labels, human_scores + machine_scores, max_fpr=max_fpr)
-    metrics["global AUC(0.01)"] = roc_auc
+    metrics["global AUC(0.01)"] = roc_auc_score(labels, human_scores + machine_scores, max_fpr=max_fpr)
 
     for prompt in PROMPT_NAMES:
         prompt_machine_scores = [score for i, score in enumerate(scores) if models[i] != "human" and prompts[i] == prompt]
         prompt_labels = [0] * len(human_scores) + [1] * len(prompt_machine_scores)
-        roc_auc = roc_auc_score(prompt_labels, human_scores + prompt_machine_scores, max_fpr=max_fpr)
-        metrics[prompt + " AUC(0.01)"] = roc_auc
+        metrics[prompt + " AUC(0.01)"] = roc_auc_score(prompt_labels, human_scores + prompt_machine_scores, max_fpr=max_fpr)
         
     return metrics
 
-def main():
-    dataset = load_from_disk(os.path.join(args.dirname, "MTD_dataset"))
+def evaluate_on_M4():
+    print(colored(f"Evaluating on M4 dataset subset: {args.M4_dataset_subset}", "blue"))
 
+    path = "/home/riverasoto1/repos/M4/data"
+    subset = args.M4_dataset_subset
+
+    filenames = [fname for fname in os.listdir(path) if subset in fname and "bloomz" not in fname]
+    filenames = [os.path.join(path, fname) for fname in filenames]
+
+    human_text, machine_text = [], []
+    for fname in filenames:
+        df = pd.read_json(fname, lines=True)
+        human_text.extend(df["human_text"].tolist())
+        machine_text.extend(df["machine_text"].tolist())
+    human_text = list(set(human_text))
+    machine_text = list(set(machine_text))
+
+    if args.debug:
+        human_text = human_text[:100]
+        machine_text = machine_text[:100]
+
+    print(colored(f"Number of human examples: {len(human_text)}", "yellow"))
+    print(colored(f"Number of machine examples: {len(machine_text)}", "yellow"))
+
+    scores = get_bino_scores(human_text + machine_text, batch_size=args.batch_size)
+    scores = [-score for score in scores]
+    # scores = get_logrank_scores(human_text + machine_text)
+    labels = [0] * len(human_text) + [1] * len(machine_text)
+
+    nan_value_indices = [i for i, score in enumerate(scores) if score != score or score is None]
+    scores = [score for i, score in enumerate(scores) if i not in nan_value_indices]
+    labels = [label for i, label in enumerate(labels) if i not in nan_value_indices]
+    pauc = roc_auc_score(labels, scores, max_fpr=0.01)
+    print(colored(f"PAUC(0.01): {pauc:.4f}", "green"))
+
+def main():
+    if args.M4_dataset_subset is not None:
+        evaluate_on_M4()
+        return 0
+    
     # set of fewshot examples for LUAR:
     fewshot_humans: list[str] = []
     num_fewshot = 10
 
+    dataset = load_from_disk(os.path.join(args.dirname, "MTD_dataset"))
     if args.debug:
         N = 50
         total_humans = N * len(MODEL_NAMES) * len(PROMPT_NAMES)
@@ -174,14 +277,8 @@ def main():
     models = [elem["model"] for elem in dataset]
     prompts = [elem["prompt"] for elem in dataset]
 
-    scores = get_LUAR_scores(texts, fewshot_humans)
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("LUAR metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
-
-    scores = get_bino_scores(texts)
+    scores = get_bino_scores(texts, batch_size=args.batch_size)
+    scores = [-score for score in scores]
     metrics = compute_metrics(scores, models, prompts)
     print()
     print(colored("Binocular metrics:", "blue"))

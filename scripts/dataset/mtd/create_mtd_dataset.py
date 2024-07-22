@@ -2,6 +2,7 @@
 import os
 import sys
 from argparse import ArgumentParser
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -27,43 +28,68 @@ MODEL_NAMES = [
 ]
 
 def main():
-    N = 1000 # 1000 per LLM per prompt, equal amount of humans
+    N = 1000 * len(MODEL_NAMES) * len(PROMPT_NAMES)
     split = "test_clean_and_joined"
     split += "_debug" if args.debug else ""
     dataset = load_from_disk(os.path.join(args.dirname, split))
-    indices = np.random.permutation(len(dataset))[:N].tolist()
+    indices = np.random.permutation(len(dataset)).tolist()
 
     records = []
+    counts = Counter()
+    seen_human = set()
+    seen_machine = set()
+    num_duplicates = 0
     for i in indices:
-        for model_name in MODEL_NAMES:
-            for prompt in PROMPT_NAMES:
-                generations_key = f"{model_name}_prompt={prompt}_generations"
-                changepoints_key = f"{model_name}_prompt={prompt}_changepoint_indices"
-
-                unit_index = dataset[i][changepoints_key][0]
-                if prompt == "continuation":
-                    unit_index -= 1
-                reference = dataset[i]["units"][unit_index]
-                generation = dataset[i][generations_key][0]
-
+        
+        for units in dataset[i]["units"]:
+            if counts[("human", None)] < N and units not in seen_human and units not in seen_machine:
                 records.append({
-                    "text": reference,
+                    "text": units,
                     "label": 0,
                     "prompt": None,
                     "model": "human",
                 })
+                counts[("human", None)] += 1
+                seen_human.add(units)
+            else:
+                break
+        
+        for model_name in MODEL_NAMES:
+            for prompt in PROMPT_NAMES:
+                generations_key = f"{model_name}_prompt={prompt}_generations"
+                cp_key = f"{model_name}_prompt={prompt}_changepoint_indices"
+                
+                for j, generation in enumerate(dataset[i][generations_key]):
+                    unit_index = dataset[i][cp_key][j]
+                    if prompt == "continuation":
+                        unit_index -= 1
+                        
+                    if dataset[i]["units"][unit_index] == generation:
+                        num_duplicates += 1
+                        continue
 
-                records.append({
-                    "text": generation,
-                    "label": 1,
-                    "prompt": prompt,
-                    "model": model_name,
-                })
+
+                    if counts[(model_name, prompt)] < N // (len(MODEL_NAMES) * len(PROMPT_NAMES)) and generation not in seen_machine and generation not in seen_human:
+                        records.append({
+                            "text": generation,
+                            "label": 1,
+                            "prompt": prompt,
+                            "model": model_name,
+                        })
+                        seen_machine.add(generation)
+                        counts[(model_name, prompt)] += 1
+                    else:
+                        break
+                
+        num_left = 2 * N - sum(counts.values())
+        print("{}/{} records left".format(num_left, 2 * N))
+        if num_left == 0:
+            break
     
+    print(f"Number of duplicates: {num_duplicates}")
     records_df = pd.DataFrame(records)
     MTD_dataset = Dataset.from_pandas(records_df)
     MTD_dataset.save_to_disk(os.path.join(args.dirname, "MTD_dataset"))
-
     return 0
 
 if __name__ == "__main__":
