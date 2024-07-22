@@ -78,8 +78,9 @@ def clean_generation(generation: Union[str, List[str]]) -> str:
             try:
                 result.append(clean_generation(g))
             except:
-                import pdb; pdb.set_trace()
-                result.append(clean_generation(g))
+                # import pdb; pdb.set_trace()
+                # result.append(clean_generation(g))
+                result.append(None)
         return result
 
     # split on obvious phrases added in predictable locations:
@@ -120,11 +121,19 @@ def clean_generation(generation: Union[str, List[str]]) -> str:
 
     return generation
 
+def clean(row):
+    row["generations"] = clean_generation(row["generations"])
+    indices_to_remove = [i for i, gen in enumerate(row["generations"]) if gen is None]
+    row["generations"] = [gen for i, gen in enumerate(row["generations"]) if i not in indices_to_remove]
+    row["changepoint_indices"] = [gen for i, gen in enumerate(row["changepoint_indices"]) if i not in indices_to_remove]
+    return row
+
 def explore_generations(dataset: Dataset) -> None:
     """Helper function to explore the generations and the clean_generation function.
     """
     generations_dirname = os.path.join(args.dirname, "generations")
     generation_filenames = list(glob(generations_dirname + f"/*{args.split}*"))
+    generation_filenames = [fname for fname in generation_filenames if "gemma" not in fname]
     if args.explore_only:
         generation_filenames = [filename for filename in generation_filenames if args.explore_only in filename]
 
@@ -186,6 +195,7 @@ def clean_all_generations() -> List[pd.DataFrame]:
     """
     generations_dirname = os.path.join(args.dirname, "generations")
     generation_filenames = list(glob(generations_dirname + f"/*{args.split}*"))
+    generation_filenames = [fname for fname in generation_filenames if "gemma" not in fname]
 
     tqdm.pandas()
     all_dfs = []
@@ -194,7 +204,8 @@ def clean_all_generations() -> List[pd.DataFrame]:
         LLM = os.path.basename(filename).split("_")[0]
         nrows = 1000 if args.debug else None
         df = pd.read_json(filename, lines=True, nrows=nrows)
-        df["generations"] = df.progress_apply(lambda row: clean_generation(row["generations"]), axis=1)
+        # df["generations"] = df.progress_apply(lambda row: clean_generation(row["generations"]), axis=1)
+        df = df.progress_apply(clean, axis=1)
 
         for prompt in PROMPT_NAMES:
             s = f"prompt={prompt}_temperature"
