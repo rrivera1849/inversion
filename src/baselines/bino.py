@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from binoculars import Binoculars
 from datasets import load_from_disk
 from sklearn.metrics import roc_auc_score
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from termcolor import colored
 from tqdm import tqdm
 
@@ -40,19 +40,13 @@ MODEL_NAMES = [
     "Phi-3-mini-4k-instruct"
 ]
 
-def get_rank(text, base_model, base_tokenizer, log=False, prompt=None):
+def get_rank(text, base_model, base_tokenizer, log=False):
     """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L298C1-L320C43
     """
     with torch.no_grad():
         tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
         logits = base_model(**tokenized).logits[:,:-1]
         labels = tokenized["input_ids"][:,1:]
-
-        if prompt is not None:
-            prompt_tokens = base_tokenizer(prompt, return_tensors="pt")
-            prompt_length = prompt_tokens["input_ids"].shape[1] - 1
-            logits = logits[:, prompt_length:]
-            labels = labels[:, prompt_length:]
 
         # get rank of each label token in the model's likelihood ordering
         matches = (logits.argsort(-1, descending=True) == labels.unsqueeze(-1)).nonzero()
@@ -86,32 +80,57 @@ def get_bino_scores(
         scores += bino.compute_score(batch)
     return scores
 
+@torch.no_grad()
+def get_openai_detector_scores(
+    text: list[str],
+    batch_size: int = 32,
+) -> list[float]:
+    """Uses OpenAI's RoBERTa Detector for AI-Text Detection
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = AutoModelForSequenceClassification.from_pretrained("openai-community/roberta-base-openai-detector")
+    model.to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained("openai-community/roberta-base-openai-detector")
+
+    probs = []
+    for i in tqdm(range(0, len(text), batch_size)):
+        batch = tokenizer(
+            text[i:i+batch_size],
+            max_length=512,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+        batch = {k:v.to(device) for k,v in batch.items()}
+
+        out = model(**batch)
+        prob = out.logits.softmax(dim=-1)[:, 0].cpu().numpy().tolist()
+        probs.extend(prob)
+    return probs
+
 def get_logrank_scores(
     text: list[str],
     model_id: str ="openai-community/gpt2-xl",
-    prompts: list[str] = None,
 ) -> list[float]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # model = AutoModelForCausalLM.from_pretrained(model_id)
-    # model.to(device)
-    # model.eval()
-    # tokenizer = AutoTokenizer.from_pretrained(model_id)
-    print("LOADING LLAMA")
-    model_name = "meta-llama/Meta-Llama-3-8B-Instruct"
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    model.to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, 
+        model_id, 
         device_map="auto", 
         torch_dtype=torch.float16,
         trust_remote_code=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     scores = []
     for i in tqdm(range(len(text))):
         try:
-            prompt = None if prompts is None else prompts[i]
-            scores.append(get_rank(text[i], model, tokenizer, log=True, prompt=prompt))
+            scores.append(get_rank(text[i], model, tokenizer, log=True))
         except:
             scores.append(None)
 
@@ -284,6 +303,15 @@ def main():
     print(colored("Binocular metrics:", "blue"))
     for k, v in metrics.items():
         print(colored(f"\t{k}: {v:.4f}", "green"))
+
+    scores = get_openai_detector_scores(texts, batch_size=args.batch_size)
+    metrics = compute_metrics(scores, models, prompts)
+    print()
+    print(colored("OpenAI Detector metrics:", "blue"))
+    for k, v in metrics.items():
+        print(colored(f"\t{k}: {v:.4f}", "green"))
+
+    # TODO: Add MSP as a Score
 
     return 0
 
