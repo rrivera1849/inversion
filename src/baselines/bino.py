@@ -143,9 +143,10 @@ def get_LUAR_scores(
     batch_size: int = 32,
 ) -> list[float]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     # HF_id = "rrivera1849/LUAR-MUD"
     HF_id = "/data1/yubnub/pretrained_weights/LUAR/S2ORC_baseline_fast"
+    print(colored("LUAR Weights: {}".format(HF_id), "green"))
+
     model = AutoModel.from_pretrained(HF_id, trust_remote_code=True).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(HF_id)
 
