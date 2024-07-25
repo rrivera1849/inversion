@@ -166,8 +166,8 @@ def main():
         bf16=True,
         learning_rate=2e-5,
         lr_scheduler_type="constant",
-        max_steps=1000,
-        save_steps=100,
+        max_steps=3000,
+        save_steps=200,
         logging_steps=100,
         warmup_steps=10,
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
