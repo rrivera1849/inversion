@@ -63,7 +63,16 @@ def get_rank(text, base_model, base_tokenizer, log=False):
             ranks = torch.log(ranks)
 
         return ranks.float().mean().item()
+    
+def get_MSP(text, base_model, base_tokenizer):
+    """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L298C1-L320C43
+    """
+    with torch.no_grad():
+        tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
+        MSP = torch.nn.functional.softmax(base_model(**tokenized).logits[:,:-1], dim=-1).flatten().max()
+        return MSP.item()
 
+@torch.no_grad()
 def get_bino_scores(
     text: list[str],
     batch_size: int = 32,
@@ -109,6 +118,7 @@ def get_openai_detector_scores(
         probs.extend(prob)
     return probs
 
+@torch.no_grad()
 def get_logrank_scores(
     text: list[str],
     model_id: str ="openai-community/gpt2-xl",
@@ -135,6 +145,63 @@ def get_logrank_scores(
             scores.append(None)
 
     return scores
+
+@torch.no_grad()
+def get_MSP_scores(
+    text: list[str],
+    model_id: str ="openai-community/gpt2-xl",
+) -> list[float]:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    model = AutoModelForCausalLM.from_pretrained(model_id)
+    model.to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        device_map="auto", 
+        torch_dtype=torch.float16,
+        trust_remote_code=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    scores = []
+    for i in tqdm(range(len(text))):
+        try:
+            scores.append(get_MSP(text[i], model, tokenizer))
+        except:
+            scores.append(None)
+
+    return scores
+
+@torch.no_grad()
+def get_RADAR_scores(
+    text: list[str],
+    batch_size: int = 32,
+) -> list[float]:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    detector = AutoModelForSequenceClassification.from_pretrained("TrustSafeAI/RADAR-Vicuna-7B")
+    tokenizer = AutoTokenizer.from_pretrained("TrustSafeAI/RADAR-Vicuna-7B")
+    detector.to(device)
+    detector.eval()
+    
+    probabilities = []
+    for i in tqdm(range(0, len(text), batch_size)):
+        batch = text[i:i+batch_size]
+        batch = tokenizer(
+            batch,
+            max_length=512, 
+            padding=True, 
+            truncation=True, 
+            return_tensors="pt",
+        )
+        batch = {k:v.to(device) for k,v in batch.items()}
+
+        output_probs = F.log_softmax(detector(**batch).logits, -1)[:, 0].exp().tolist()
+        probabilities.extend(output_probs)
+
+    return probabilities
 
 @torch.no_grad()
 def get_LUAR_scores(
@@ -181,7 +248,6 @@ def get_LUAR_scores(
         scores.extend(F.cosine_similarity(fewshot_emb, batch_emb).cpu().numpy().tolist())
 
     return scores
-
 
 def compute_metrics(
     scores: list[float], 
@@ -232,7 +298,6 @@ def evaluate_on_M4():
 
     scores = get_bino_scores(human_text + machine_text, batch_size=args.batch_size)
     scores = [-score for score in scores]
-    # scores = get_logrank_scores(human_text + machine_text)
     labels = [0] * len(human_text) + [1] * len(machine_text)
 
     nan_value_indices = [i for i, score in enumerate(scores) if score != score or score is None]
@@ -240,6 +305,7 @@ def evaluate_on_M4():
     labels = [label for i, label in enumerate(labels) if i not in nan_value_indices]
     pauc = roc_auc_score(labels, scores, max_fpr=0.01)
     print(colored(f"PAUC(0.01): {pauc:.4f}", "green"))
+
 
 def main():
     if args.M4_dataset_subset is not None:
@@ -297,22 +363,34 @@ def main():
     models = [elem["model"] for elem in dataset]
     prompts = [elem["prompt"] for elem in dataset]
 
-    scores = get_bino_scores(texts, batch_size=args.batch_size)
-    scores = [-score for score in scores]
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("Binocular metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
+    # scores = get_bino_scores(texts, batch_size=args.batch_size)
+    # scores = [-score for score in scores]
+    # metrics = compute_metrics(scores, models, prompts)
+    # print()
+    # print(colored("Binocular metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
 
-    scores = get_openai_detector_scores(texts, batch_size=args.batch_size)
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("OpenAI Detector metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
-
-    # TODO: Add MSP as a Score
+    # scores = get_openai_detector_scores(texts, batch_size=args.batch_size)
+    # metrics = compute_metrics(scores, models, prompts)
+    # print()
+    # print(colored("OpenAI Detector metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
+        
+    # scores = get_MSP_scores(texts)
+    # metrics = compute_metrics(scores, models, prompts)
+    # print()
+    # print(colored("MSP metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
+    
+    # scores = get_RADAR_scores(texts, batch_size=args.batch_size)
+    # metrics = compute_metrics(scores, models, prompts)
+    # print()
+    # print(colored("RADAR metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
 
     return 0
 
