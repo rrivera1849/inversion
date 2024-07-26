@@ -157,7 +157,7 @@ def main():
         num_training_batches = 10 if args.debug else num_training_batches
         pbar = tqdm(total=num_training_batches, unit="batch")
         model.train()
-        for batch in batch_generator(dataset, args.batch_size, device, num_batches=10):
+        for batch in batch_generator(dataset, args.batch_size, device, num_batches=10 if args.debug else None):
             output = model(batch)
 
             loss = output["loss"]
@@ -187,7 +187,7 @@ def main():
             average_sequence_accuracy = 0.
             average_token_mixture_accuracy = 0.
             
-            for batch in batch_generator(validation_dataset, args.batch_size, device, num_batches=10):
+            for batch in batch_generator(validation_dataset, args.batch_size, device, num_batches=10 if args.debug else None):
                 output = model(batch)
                 average_loss += output["loss"].item()
                 average_sequence_loss += output["sequence_loss"].item()
