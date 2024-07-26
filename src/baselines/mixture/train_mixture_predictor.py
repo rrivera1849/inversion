@@ -19,6 +19,8 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 
+from sklearn.metrics import precision_score, recall_score, f1_score
+
 parser = ArgumentParser()
 parser.add_argument("--experiment_id", type=str, default="debug",
                     help="Experiment ID, used for logging and saving checkpoints.")
@@ -64,14 +66,22 @@ class MixturePredictor(nn.Module):
         sequence_mixture_preds = self.sequence_mixture_cls(out["pooler_output"])
         sequence_loss = self.loss(sequence_mixture_preds, inputs["label"])
         sequence_accuracy = (sequence_mixture_preds.argmax(dim=1) == inputs["label"]).float().mean()
+        sequence_precision = precision_score(inputs["label"], sequence_mixture_preds.argmax(dim=1))
+        sequence_recall = recall_score(inputs["label"], sequence_mixture_preds.argmax(dim=1))
+        sequence_f1 = f1_score(inputs["label"], sequence_mixture_preds.argmax(dim=1))
 
         # Token Level Predictions:
         token_mixture_loss = 0.
         token_mixture_accuracy = 0.
+        token_mixture_preds = []
+        
         for i, tagger_label in enumerate(inputs["tagger_labels"]):
             token_mixture_preds = self.token_mixture_cls(out["last_hidden_state"][i, 1:len(tagger_label)+1])
             token_mixture_loss += self.loss(token_mixture_preds, tagger_label)
             token_mixture_accuracy += (token_mixture_preds.argmax(dim=1) == tagger_label).float().mean()
+            token_mixture_preds.append(token_mixture_preds)
+        
+        token_mixture_loss /= batch_size
         token_mixture_accuracy /= batch_size
 
         return {
