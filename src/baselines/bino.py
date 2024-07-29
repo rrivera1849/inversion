@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 sys.path.append("../../scripts/dataset/changepoint")
 from prompts import PROMPT_NAMES
+from mixture.model import MixturePredictor
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
@@ -198,9 +199,30 @@ def get_RADAR_scores(
         )
         batch = {k:v.to(device) for k,v in batch.items()}
 
-        output_probs = F.log_softmax(detector(**batch).logits, -1)[:, 0].exp().tolist()
+        output_probs = F.log_softmax(detector(**batch).logits, dim=-1)[:, 0].exp().tolist()
         probabilities.extend(output_probs)
 
+    return probabilities
+
+@torch.no_grad()
+def get_mixture_predictor_scores(
+    text: list[str],
+    batch_size: int = 32,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MixturePredictor()
+    state_dict = torch.load("./mixture/outputs/mixture_baseline_nocontinuation/checkpoints/best.pth")["model"]
+    model.load_state_dict(state_dict)
+    model.to(device)
+    model.eval()
+    
+    probabilities = []
+    for i in tqdm(range(0, len(text), batch_size)):
+        batch = text[i:i+batch_size]
+        sequence_mixture_preds, _ = model.predict(batch)
+        sequence_mixture_preds = F.log_softmax(sequence_mixture_preds, dim=-1)[:, 1].exp().tolist()
+        probabilities.extend(sequence_mixture_preds)
+    
     return probabilities
 
 @torch.no_grad()
@@ -267,6 +289,8 @@ def compute_metrics(
 
     for prompt in PROMPT_NAMES:
         prompt_machine_scores = [score for i, score in enumerate(scores) if models[i] != "human" and prompts[i] == prompt]
+        if len(prompt_machine_scores) == 0:
+            continue
         prompt_labels = [0] * len(human_scores) + [1] * len(prompt_machine_scores)
         metrics[prompt + " AUC(0.01)"] = roc_auc_score(prompt_labels, human_scores + prompt_machine_scores, max_fpr=max_fpr)
         
@@ -391,6 +415,19 @@ def main():
     # print(colored("RADAR metrics:", "blue"))
     # for k, v in metrics.items():
     #     print(colored(f"\t{k}: {v:.4f}", "green"))
+    
+    # indices = [i for i, prompt in enumerate(prompts) if prompt is None or prompt == "rephrase"]
+    # texts = [texts[i] for i in indices]
+    # models = [models[i] for i in indices]
+    # prompts = [prompts[i] for i in indices]
+
+    # import pdb; pdb.set_trace()
+    scores = get_mixture_predictor_scores(texts, batch_size=args.batch_size)
+    metrics = compute_metrics(scores, models, prompts)
+    print()
+    print(colored("MixturePredictor metrics:", "blue"))
+    for k, v in metrics.items():
+        print(colored(f"\t{k}: {v:.4f}", "green"))
 
     return 0
 
