@@ -25,36 +25,32 @@ class MixturePredictor(nn.Module):
     def forward(
         self, 
         inputs: dict[str, torch.Tensor],
+        is_train: bool = True,
     ) -> dict[str, float]:
+        result = {}
         batch_size = inputs["input_ids"].size(0)
         
         out = self.model(
             input_ids = inputs["input_ids"],
             attention_mask = inputs["attention_mask"],
         )
-
+        
         # Sequence Level Predictions:
         sequence_mixture_preds = self.sequence_mixture_cls(out["pooler_output"])
-        sequence_loss = self.loss(sequence_mixture_preds, inputs["label"])
-        sequence_accuracy = (sequence_mixture_preds.argmax(dim=1) == inputs["label"]).float().mean()
+        result["sequence_loss"] = self.loss(sequence_mixture_preds, inputs["label"])
+        result["sequence_mixture_preds"] = sequence_mixture_preds.detach().cpu()
 
         # Token Level Predictions:
-        token_mixture_loss = 0.
-        token_mixture_accuracy = 0.
+        result["token_mixture_loss"] = 0.
+        result["token_mixture_preds"] = []
         for i, tagger_label in enumerate(inputs["tagger_labels"]):
             token_mixture_preds = self.token_mixture_cls(out["last_hidden_state"][i, 1:len(tagger_label)+1])
-            token_mixture_loss += self.loss(token_mixture_preds, tagger_label)
-            token_mixture_accuracy += (token_mixture_preds.argmax(dim=1) == tagger_label).float().mean()
-        token_mixture_loss /= batch_size
-        token_mixture_accuracy /= batch_size
+            result["token_mixture_loss"] += self.loss(token_mixture_preds, tagger_label)
+            result["token_mixture_preds"].append(token_mixture_preds.detach().cpu())
+        result["token_mixture_loss"] /= batch_size
 
-        return {
-            "loss": sequence_loss + token_mixture_loss,
-            "sequence_loss": sequence_loss,
-            "token_mixture_loss": token_mixture_loss,
-            "sequence_accuracy": sequence_accuracy,
-            "token_mixture_accuracy": token_mixture_accuracy
-        }
+        result["loss"] = result["sequence_loss"] + result["token_mixture_loss"]
+        return result
         
     @torch.no_grad()
     def predict(

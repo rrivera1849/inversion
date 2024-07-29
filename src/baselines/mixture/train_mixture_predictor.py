@@ -10,11 +10,13 @@ import os
 import sys
 from argparse import ArgumentParser
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import (
+    accuracy_score,
     f1_score,
     precision_score,
     recall_score,
@@ -39,6 +41,13 @@ parser.add_argument("--evaluate_only", default=False, action="store_true",
 parser.add_argument("--seed", type=int, default=43)
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
+
+METRICS = {
+    "accuracy": accuracy_score,
+    "f1": f1_score,
+    "precision": precision_score,
+    "recall": recall_score,
+}
 
 def collate_fn(batch):
     return {
@@ -89,6 +98,41 @@ def save_checkpoint(
         "loss": loss,
     }, path)
     
+def compute_metrics(
+    label: torch.Tensor, 
+    tagger_labels: list[torch.Tensor], 
+    sequence_mixture_preds: torch.Tensor, 
+    token_mixture_preds: list[torch.Tensor],
+):
+    metric_results = {}
+    label = label.cpu()
+    tagger_labels = [tagger_label.cpu() for tagger_label in tagger_labels]
+    for metric_name, metric_fn in METRICS.items():
+        if metric_name != "accuracy":
+            kwargs = {"zero_division": 0.}
+        else:
+            kwargs = {}
+
+        # Sequence Level Metrics:
+        sequence_metric = metric_fn(label, sequence_mixture_preds.argmax(axis=1), **kwargs)
+
+        # Token Level Metrics:
+        token_mixture_metric = 0.0
+        for j, tagger_label in enumerate(tagger_labels):
+            if label[j] == 0:
+                # To avoid errors in the metric calculation, we invert the tagger label.
+                tagger_label = abs(1 - tagger_label)
+                pred = abs(1 - token_mixture_preds[j].argmax(axis=1))
+            else:
+                pred = token_mixture_preds[j].argmax(axis=1)
+
+            metric = metric_fn(tagger_label, pred, **kwargs)
+            token_mixture_metric += metric
+        token_mixture_metric /= len(tagger_labels)
+        metric_results[metric_name] = (sequence_metric, token_mixture_metric)
+
+    return metric_results
+    
 def train_step(
     dataset: pd.DataFrame,
     model: nn.Module, 
@@ -113,14 +157,26 @@ def train_step(
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        writer.add_scalar("train_loss/total", loss.item(), n_train_iter)
-        writer.add_scalar("train_loss/sequence", output["sequence_loss"].item(), n_train_iter)
-        writer.add_scalar("train_loss/token_mixture", output["token_mixture_loss"].item(), n_train_iter)
-        writer.add_scalar("train_accuracy/sequence", output["sequence_accuracy"].item(), n_train_iter)
-        writer.add_scalar("train_accuracy/token_mixture", output["token_mixture_accuracy"].item(), n_train_iter)
+
+        writer.add_scalar("train/loss", loss.item(), n_train_iter)
+        writer.add_scalar("train/sequence_loss", output["sequence_loss"].item(), n_train_iter)
+        writer.add_scalar("train/token_mixture_loss", output["token_mixture_loss"].item(), n_train_iter)
+
+        metric_results = compute_metrics(
+            batch["label"],
+            batch["tagger_labels"],
+            output["sequence_mixture_preds"],
+            output["token_mixture_preds"],
+        )
+        for (metric_name, (sequence_metric, token_mixture_metric)) in metric_results.items():
+            writer.add_scalar(f"train/sequence_{metric_name}", sequence_metric, n_train_iter)
+            writer.add_scalar(f"train/token_mixture_{metric_name}", token_mixture_metric, n_train_iter)
+
         n_train_iter += 1
 
-        pbar.set_description(f"Training Loss: {loss.item():.4f} | Seq Acc: {output['sequence_accuracy'].item():.4f} | Tok Acc: {output['token_mixture_accuracy'].item():.4f}")
+        sequence_accuracy = metric_results["accuracy"][0]
+        token_mixture_f1 = metric_results["f1"][1]
+        pbar.set_description(f"Training Loss: {loss.item():.4f} | Seq Acc: {sequence_accuracy:.4f} | Tok F1: {token_mixture_f1:.4f}")
         pbar.update(1)
     pbar.close()
     
@@ -143,8 +199,8 @@ def validation_step(
     average_loss = 0.
     average_sequence_loss = 0.
     average_token_mixture_loss = 0.
-    average_sequence_accuracy = 0.
-    average_token_mixture_accuracy = 0.
+
+    metric_accumulators = {metric_name: [] for metric_name in METRICS.keys()}
     
     for batch in batch_generator(
         validation_dataset, 
@@ -156,37 +212,50 @@ def validation_step(
         average_loss += output["loss"].item()
         average_sequence_loss += output["sequence_loss"].item()
         average_token_mixture_loss += output["token_mixture_loss"].item()
-        average_sequence_accuracy += output["sequence_accuracy"].item()
-        average_token_mixture_accuracy += output["token_mixture_accuracy"].item()
-        pbar.set_description(f"Validation Loss: {output['loss'].item():.4f} | Seq Acc: {output['sequence_accuracy'].item():.4f} | Tok Acc: {output['token_mixture_accuracy'].item():.4f}")
+
+        metric_results = compute_metrics(
+            batch["label"],
+            batch["tagger_labels"],
+            output["sequence_mixture_preds"],
+            output["token_mixture_preds"],
+        )
+        for metric_name, (sequence_metric, token_mixture_metric) in metric_results.items():
+            metric_accumulators[metric_name].append((sequence_metric, token_mixture_metric))
+
+        sequence_accuracy = metric_results["accuracy"][0]
+        token_mixture_f1 = metric_results["f1"][1]
+        pbar.set_description(f"Validation Loss: {output['loss'].item():.4f} | Seq Acc: {sequence_accuracy:.4f} | Tok F1: {token_mixture_f1:.4f}")
         pbar.update(1)
-        
+
     average_loss /= num_validation_batches
     average_sequence_loss /= num_validation_batches
     average_token_mixture_loss /= num_validation_batches
-    average_sequence_accuracy /= num_validation_batches
-    average_token_mixture_accuracy /= num_validation_batches
     
     if write_tensorboard_logs:
         writer.add_scalar("validation_loss/total", average_loss, epoch)
         writer.add_scalar("validation_loss/sequence", average_sequence_loss, epoch)
         writer.add_scalar("validation_loss/token_mixture", average_token_mixture_loss, epoch)
-        writer.add_scalar("validation_accuracy/sequence", average_sequence_accuracy, epoch)
-        writer.add_scalar("validation_accuracy/token_mixture", average_token_mixture_accuracy, epoch)
+
+        for metric_name, metric_values in metric_accumulators.items():
+            sequence_metric_values, token_mixture_metric_values = zip(*metric_values)
+            writer.add_scalar(f"validation/sequence_{metric_name}", np.mean(sequence_metric_values), epoch)
+            writer.add_scalar(f"validation/token_mixture_{metric_name}", np.mean(token_mixture_metric_values), epoch)
+
     pbar.close()
     
-    # the same but nice colors:
     print(colored(f"{'Validation Epoch':<20} {epoch+1}", "blue"))
-    print(colored(f"{'\tLoss':<20} {average_loss:.4f}", "cyan"))
-    print(colored(f"{'\tSeq Loss':<20} {average_sequence_loss:.4f}", "cyan"))
-    print(colored(f"{'\tTok Loss':<20} {average_token_mixture_loss:.4f}", "cyan"))
-    print(colored(f"{'\tSeq Acc':<20} {average_sequence_accuracy:.4f}", "cyan"))
-    print(colored(f"{'\tTok Acc':<20} {average_token_mixture_accuracy:.4f}", "cyan"))
-    
+    print(colored(f"{'Loss':<20} {average_loss:.4f}", "cyan"))
+    print(colored(f"{'Seq Loss':<20} {average_sequence_loss:.4f}", "cyan"))
+    print(colored(f"{'Tok Loss':<20} {average_token_mixture_loss:.4f}", "cyan"))
+    for metric_name, metric_values in metric_accumulators.items():
+        sequence_metric_values, token_mixture_metric_values = zip(*metric_values)
+        print(colored(f"{'Seq '+metric_name:<20} {np.mean(sequence_metric_values):.4f}", "cyan"))
+        print(colored(f"{'Tok '+metric_name:<20} {np.mean(token_mixture_metric_values):.4f}", "cyan"))
+
     return average_loss
 
 def main():
-    if args.evalute_only and args.checkpoint_path is None:
+    if args.evaluate_only and args.checkpoint_path is None:
         raise ValueError("Must provide a checkpoint path to evaluate the model.")
 
     experiment_dir = os.path.join(f"./outputs/{args.experiment_id}")
