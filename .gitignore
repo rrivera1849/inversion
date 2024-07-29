@@ -1,5 +1,7 @@
 *.jsonl
 *outputs*
+*mlruns*
+*results*
 src/results
 
 # Byte-compiled / optimized / DLL files
