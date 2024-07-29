@@ -2,8 +2,8 @@
 1. HuggingFace accelerate for multi-processing.
 2. Continuations (full machine) for training.
 3. Logging to file.
-4. More metrics than just accuracy.
-5. Sequence prediction dependence on token prediction.
+4. Sequence prediction dependence on token prediction.
+5. Dataset should have LLM column and be split into validation and test beforehand.
 """
 
 import os
@@ -282,7 +282,7 @@ def main():
         optimizer.load_state_dict(checkpoint["optimizer"])
         print(colored(f"Loaded checkpoint from {args.checkpoint_path}", "green"))
 
-        if "loss" not in checkpoint:
+        if "loss" not in checkpoint and not args.evaluate_only:
             print(colored("Checkpoint does not contain loss information, runing validation to compute loss.", "yellow"))
 
             best_loss = validation_step(
@@ -290,10 +290,10 @@ def main():
                 model,
                 writer,
                 device,
-                None,
+                -1,
                 write_tensorboard_logs=False
             )
-        else:
+        elif "loss" in checkpoint:
             best_loss = checkpoint["loss"]
 
     if args.evaluate_only:
@@ -302,7 +302,8 @@ def main():
             model,
             writer,
             device,
-            None
+            -1,
+            write_tensorboard_logs=False,
         )
         return 0
     
