@@ -1,3 +1,5 @@
+*.jsonl
+*outputs*
 src/results
 
 # Byte-compiled / optimized / DLL files
