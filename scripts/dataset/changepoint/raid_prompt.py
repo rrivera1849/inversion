@@ -1,3 +1,5 @@
+"""Very similar to hf_prompt.py, but works on the RAID dataset. 
+"""
 
 import json
 import os
@@ -15,18 +17,13 @@ random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    default="/data1/yubnub/changepoint/RAID_rephrase/train_human_unit_128",
                     help="Directory where the dataset is stored.")
-parser.add_argument("--model_name", type=str, default="google/gemma-7b-it",
-                    choices=["google/gemma-7b-it", "mistralai/Mistral-7B-Instruct-v0.3", 
-                             "mistralai/Mixtral-8x7B-Instruct-v0.1", "meta-llama/Meta-Llama-3-8B-Instruct",
+parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
+                    choices=["mistralai/Mistral-7B-Instruct-v0.3", 
+                             "meta-llama/Meta-Llama-3-8B-Instruct",
                              "microsoft/Phi-3-mini-4k-instruct"],
                     help="Huggingface model name to use for generation.")
-parser.add_argument("--split", type=str, default="validation",
-                    help="Dataset split to generate prompts for.")
-parser.add_argument("--prompt", type=str, default="rephrase",
-                    choices=["rephrase", "rephrase_with_context", "continuation"],
-                    help="Prompt type to use for generation")
 parser.add_argument("--example_batch_size", type=int, default=10,
                     help="Number of examples to generate prompts for at any given time.")
 parser.add_argument("--gen_batch_size", type=int, default=128,
@@ -48,9 +45,8 @@ args = parser.parse_args()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
 
-DIRNAME = args.dirname
-DATASET = load_from_disk(f"{DIRNAME}/{args.split}")
-PROMPT = get_prompt(args.prompt)
+DATASET = load_from_disk(args.dirname)
+PROMPT = get_prompt("rephrase")
 
 attn_implementation = "flash_attention_2" if "Phi-3" in args.model_name else None
 model = AutoModelForCausalLM.from_pretrained(
@@ -77,10 +73,10 @@ else:
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
 generation_config = GenerationConfig(
-    max_new_tokens=args.max_gen_len,
     temperature=args.temperature,
     do_sample=True,
     top_p=args.top_p,
+    max_new_tokens=args.max_gen_len,
 )
 
 def count_num_tokens(prompt):
@@ -90,11 +86,9 @@ def get_generations(prompts, sub_batch_size=1):
     """Returns a list of completions for the given prompts.
     """
     with torch.inference_mode():
-        max_length = 2048 if args.prompt == "rephrase_with_context" else 1024
-
         generations = []
         num_tokens = [count_num_tokens(prompt) for prompt in prompts]
-
+        
         if args.fall_back and max(num_tokens) > args.fall_back_num_tokens:
             print("Falling to smaller batch size due to large number of tokens...")
             prompts = [prompts[i:i+sub_batch_size] for i in range(0, len(prompts), sub_batch_size)]
@@ -104,7 +98,7 @@ def get_generations(prompts, sub_batch_size=1):
         for j, prompt_batch in enumerate(prompts):
             inputs = tokenizer(
                 prompt_batch,
-                max_length=max_length, 
+                max_length=1024,
                 padding=True,
                 truncation=True,
                 return_tensors="pt",
@@ -122,10 +116,10 @@ def get_generations(prompts, sub_batch_size=1):
     assert len(generations) == sum(len(prompt_batch) for prompt_batch in prompts)
     return generations
 
-dataset_name = "{}_{}_prompt={}_temperature={}_top_p={}.jsonl".format(
-    args.model_name.split("/")[1], args.split, args.prompt, args.temperature, args.top_p
+dataset_name = "{}_prompt=rephrase_temperature={}_top_p={}.jsonl".format(
+    args.model_name.split("/")[1], args.temperature, args.top_p
 )
-savename = f"{DIRNAME}/generations/{dataset_name}"
+savename = f"{args.dirname}/../generations/{dataset_name}"
 if os.path.isfile(savename):
     fout = open(savename, "a+")
     last_index = json.loads(open(savename, "r").readlines()[-1])["dataset_index"] + 1
@@ -136,35 +130,19 @@ else:
     print(f"Creating {dataset_name}, last_index={last_index}")
 
 for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
+    # Create prompts
     dataset_indices = []
-    prompts = []
     lengths = [0]
-    subsample_changepoint_indices = []
+    prompts = []
     for j in range(i, min(i+args.example_batch_size, len(DATASET))):
         example = DATASET[j]
-        changepoint_indices = example["changepoint_indices"]
-        subsample_indices = random.sample(range(len(changepoint_indices)), len(changepoint_indices) // 2)
-        if len(subsample_indices) == 0:
-            continue
-        changepoint_indices = [changepoint_indices[sidx] for sidx in subsample_indices]
+        lengths.append(len(example["units"]))
         dataset_indices.append(j)
-        subsample_changepoint_indices.append(changepoint_indices)
-        lengths.append(len(changepoint_indices))
-        
-        if args.prompt == "rephrase_with_context":
-            prompts.extend(
-                [PROMPT.format(example["units"][k-1], example["units"][k+1], example["units"][k]) 
-                 for k in changepoint_indices]
+        for unit in example["units"]:
+            prompts.append(
+                PROMPT.format(unit)
             )
-        elif args.prompt == "continuation":
-            prompts.extend(
-                [PROMPT.format(example["units"][k-1]) for k in changepoint_indices]
-            )
-        else:
-            prompts.extend(
-                [PROMPT.format(example["units"][k]) for k in changepoint_indices]
-            )
-            
+
     if "Phi-3" in args.model_name:
         # https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
         prompts = [
@@ -173,7 +151,7 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
             for prompt in prompts
         ]
 
-    # Generate Completions
+    # Generate completions
     generations = []
     for j in range(0, len(prompts), args.gen_batch_size):
         batch_generations = get_generations(prompts[j:j+args.gen_batch_size])
@@ -184,18 +162,16 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
                 print("> {}".format(generation))
                 print("="*50)
                 print()
-                
+                   
+    # Save to file
     for j, length in enumerate(lengths[1:]):
         start = sum(lengths[:j+1])
         end = start + length
         item = {
             "generations": generations[start:end],
-            "changepoint_indices": subsample_changepoint_indices[j],
             "dataset_index": dataset_indices[j],
         }
         fout.write(json.dumps(item) + "\n")
 
     if args.debug:
         break
-    
-    
