@@ -1,4 +1,5 @@
 
+import random; random.seed(43)
 import sys
 from argparse import ArgumentParser
 
@@ -10,10 +11,12 @@ from transformers import (
     AutoModelForSequenceClassification, 
     AutoTokenizer
 )
+from termcolor import colored
 from tqdm import tqdm
 
+from fast_detect_gpt import get_sampling_discrepancy_analytic, get_sampling_discrepancy
 from mixture.model import MixturePredictor
-from utils import load_MTD_data, compute_metrics
+from utils import load_MTD_data, compute_metrics, load_model, MODELS
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
@@ -52,13 +55,21 @@ def get_rank(text, base_model, base_tokenizer, log=False):
 def get_bino_scores(
     text: list[str],
     batch_size: int = 32,
+    reference_model_id: str = None,
 ) -> list[float]:
     """Compute Bino scores for a list of text
     """
-    bino = Binoculars(
-        observer_name_or_path="tiiuae/falcon-7b",
-        performer_name_or_path="tiiuae/falcon-7b-instruct",
-    )
+    if reference_model_id:
+        bino = Binoculars(
+            observer_name_or_path=reference_model_id,
+            performer_name_or_path="mistralai/Mistral-7B-v0.3",
+            tokenizer_model_id="mistralai/Mistral-7B-v0.3",
+        )
+    else:
+        bino = Binoculars(
+            observer_name_or_path="tiiuae/falcon-7b",
+            performer_name_or_path="tiiuae/falcon-7b-instruct",
+        )
     scores = []
     for i in tqdm(range(0, len(text), batch_size)):
         batch = text[i:i+batch_size]
@@ -123,34 +134,6 @@ def get_logrank_scores(
     return scores
 
 @torch.no_grad()
-def get_MSP_scores(
-    text: list[str],
-    model_id: str ="openai-community/gpt2-xl",
-) -> list[float]:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    model = AutoModelForCausalLM.from_pretrained(model_id)
-    model.to(device)
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, 
-        device_map="auto", 
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    scores = []
-    for i in tqdm(range(len(text))):
-        try:
-            scores.append(get_MSP(text[i], model, tokenizer))
-        except:
-            scores.append(None)
-
-    return scores
-
-@torch.no_grad()
 def get_RADAR_scores(
     text: list[str],
     batch_size: int = 32,
@@ -200,12 +183,113 @@ def get_mixture_predictor_scores(
     
     return probabilities
 
+
+@torch.no_grad()
+def get_fast_detect_gpt_scores(
+    text: list[str],
+    base_model_id: str = None,
+    reference_model_id: str = None,
+    with_rephrase_prompt=False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if base_model_id is None:
+        base_model, base_tok = load_model()
+    else:
+        base_model, base_tok = load_model(base_model_id)
+        
+    if reference_model_id is not None:
+        reference_model, reference_tok = load_model(reference_model_id)
+
+    scores = []
+    for sample in tqdm(text):
+        tok = base_tok(
+            sample, 
+            padding=True,
+            truncation=True, 
+            return_tensors="pt", 
+        ).to(device)
+        base_logits = base_model(**tok).logits[:, :-1]
+        labels = tok["input_ids"][:, 1:]
+        
+        if with_rephrase_prompt:
+            sample_to_rephrase = sample.split()
+            random.shuffle(sample_to_rephrase)
+            sample_to_rephrase = " ".join(sample_to_rephrase)
+            prompt = "Rephrase: {}\nRephrased Passage: ".format(sample_to_rephrase)
+            if reference_model_id is not None:
+                tok = reference_tok(
+                    prompt + sample, 
+                    padding=True,
+                    truncation=True, 
+                    return_tensors="pt", 
+                ).to(device)
+                reference_logits = reference_model(**tok).logits
+            else:
+                tok = base_tok(
+                    prompt + sample, 
+                    padding=True,
+                    truncation=True, 
+                    return_tensors="pt", 
+                ).to(device)
+                reference_logits = base_model(**tok).logits
+            reference_logits = reference_logits[:, -base_logits.size(1)-1:]
+            reference_logits = reference_logits[:, :-1]
+        elif reference_model_id is not None:
+            tok = reference_tok(
+                sample, 
+                padding=True, 
+                truncation=True, 
+                return_tensors="pt", 
+            ).to(device)
+            reference_logits = reference_model(**tok).logits[:, :-1]
+        else:
+            reference_logits = base_logits
+        
+        discrepancy = get_sampling_discrepancy(reference_logits, base_logits, labels)
+        scores.append(discrepancy)
+    return scores
+
+
+@torch.no_grad()
+def get_discrepancy_with_most_likely(
+    text: list[str],
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, tokenizer = load_model(MODELS["rephrase"])
+    reference_model, reference_tokenizer = load_model(MODELS["human"])
+
+    loss_fn = torch.nn.CrossEntropyLoss()
+    scores = []
+    for sample in tqdm(text):
+        tok = tokenizer(
+            sample, 
+            truncation=True, 
+            return_tensors="pt", 
+        ).to(device)
+        tok["labels"] = tok["input_ids"].clone()
+        out = model(**tok)
+        base_perplexity = out.loss.exp().item()
+
+        tok = reference_tokenizer(
+            sample, 
+            truncation=True, 
+            return_tensors="pt", 
+        ).to(device)
+        tok["labels"] = tok["input_ids"].clone()
+        out = reference_model(**tok)
+        reference_perplexity = out.loss.exp().item()
+        
+        scores.append(base_perplexity / reference_perplexity)
+        
+    return scores
+
 def main():
     texts, models, prompts = load_MTD_data(args.dirname, debug=args.debug, debug_N=50)
     
     # TODO: Refactor to remove the repetition.
     
-    # scores = get_bino_scores(texts, batch_size=args.batch_size)
+    # scores = get_bino_scores(texts, batch_size=args.batch_size, reference_model_id=MODELS["human"])
     # scores = [-score for score in scores]
     # metrics = compute_metrics(scores, models, prompts)
     # print()
@@ -240,6 +324,21 @@ def main():
     # print(colored("MixturePredictor metrics:", "blue"))
     # for k, v in metrics.items():
     #     print(colored(f"\t{k}: {v:.4f}", "green"))
+
+    # scores = get_fast_detect_gpt_scores(texts, base_model_id=MODELS["human"])
+    # metrics = compute_metrics(scores, models, prompts, max_fpr=0.1)
+    # print()
+    # print(colored("FastDetectGpt metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
+
+    # scores = get_discrepancy_with_most_likely(texts)
+    # metrics = compute_metrics(scores, models, prompts)
+    # print()
+    # print(colored("Discrepancy with Most Likely metrics:", "blue"))
+    # for k, v in metrics.items():
+    #     print(colored(f"\t{k}: {v:.4f}", "green"))
+
 
     return 0
 

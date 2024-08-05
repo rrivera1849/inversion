@@ -20,6 +20,8 @@ parser.add_argument("--num_samples", type=int, default=100_000,
                     help="Number of samples to draw from the dataset in total.")
 parser.add_argument("--units_perc_per_sample", type=float, default=0.10,
                     help="Percentage of units to take from each paper when creating the dataset.")
+parser.add_argument("--tokenizer", type=str, default="roberta-large",
+                    help="Tokenizer to use for the dataset.")
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
@@ -77,7 +79,8 @@ def get_levenshtein_tags(string1, string2, tokenizer):
     return output_list
 
 def main():
-    fname = "./mixture_dataset.jsonl"
+    tokenizer_name = args.tokenizer.split("/")[-1]
+    fname = f"./mixture_dataset_tokenizer={tokenizer_name}_num-samples={args.num_samples}.jsonl"
     if os.path.isfile(fname):
         print(f"{fname}, already exists...")
         return 0
@@ -87,7 +90,9 @@ def main():
     if args.debug:
         dataset = dataset.select(range(1_000))
         
-    tokenizer = AutoTokenizer.from_pretrained("roberta-large")
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
     def get_text_subset(text: str, tokenizer: AutoTokenizer, max_length: int = 510):
         return tokenizer.decode(tokenizer(text)["input_ids"][1:-1][:max_length], skip_special_tokens=True)
@@ -134,6 +139,9 @@ def main():
                     text,
                     (1, tag_labels[:len(tokenizer.tokenize(text))])
                 ))
+
+        if len(dataset_negative_samples) >= args.num_samples and len(dataset_positive_samples) >= args.num_samples:
+            break
 
     random.shuffle(dataset_negative_samples)
     random.shuffle(dataset_positive_samples)
