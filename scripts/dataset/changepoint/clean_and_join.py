@@ -133,6 +133,9 @@ def explore_generations(dataset: Dataset) -> None:
     """
     generations_dirname = os.path.join(args.dirname, "generations")
     generation_filenames = list(glob(generations_dirname + f"/*{args.split}*"))
+    if len(generation_filenames) == 0:
+        generation_filenames = list(glob(generations_dirname + "/*"))
+        assert len(generation_filenames) > 0, "No files found in the generations directory."
     generation_filenames = [fname for fname in generation_filenames if "gemma" not in fname]
     if args.explore_only:
         generation_filenames = [filename for filename in generation_filenames if args.explore_only in filename]
@@ -145,13 +148,11 @@ def explore_generations(dataset: Dataset) -> None:
             df = pd.read_json(filename, lines=True, nrows=nrows)
 
             # print some generations to get a feel for what needs to be cleaned
-            generations = df["generations"].explode().tolist()
-            random.shuffle(generations)
+            if "changepoint_indices" not in df.columns:
+                df["changepoint_indices"] = df["generations"].apply(lambda x: list(range(len(x))))
             to_iterate = df.explode(["generations", "changepoint_indices"]).sample(frac=1., random_state=43)
             to_iterate = to_iterate.reset_index(drop=True).iloc[:args.explore_num]
-            LLM = os.path.basename(filename).split("_")[0]
             for i, row in to_iterate.iterrows():
-                
                 original_index = row["changepoint_indices"]
                 original_index -= 1 if prompt == "continuation" else 0
                 original = dataset[row["dataset_index"]]["units"][original_index]
@@ -188,13 +189,16 @@ def explore_generations(dataset: Dataset) -> None:
                     print(colored(">>> ORIGINAL AND GENERATION ARE EQUAL", "red"))
 
                 input("Continue?")
-                
+
 def clean_all_generations() -> List[pd.DataFrame]:
     """Cleans all the generations and returns them in a list of pd.DataFrame, 
        where each DataFrame corresponds to a different LLM and prompt.
     """
     generations_dirname = os.path.join(args.dirname, "generations")
     generation_filenames = list(glob(generations_dirname + f"/*{args.split}*"))
+    if len(generation_filenames) == 0:
+        generation_filenames = list(glob(generations_dirname + "/*"))
+        assert len(generation_filenames) > 0, "No files found in the generations directory."
     generation_filenames = [fname for fname in generation_filenames if "gemma" not in fname]
 
     tqdm.pandas()
@@ -204,7 +208,8 @@ def clean_all_generations() -> List[pd.DataFrame]:
         LLM = os.path.basename(filename).split("_")[0]
         nrows = 1000 if args.debug else None
         df = pd.read_json(filename, lines=True, nrows=nrows)
-        # df["generations"] = df.progress_apply(lambda row: clean_generation(row["generations"]), axis=1)
+        if "changepoint_indices" not in df.columns:
+            df["changepoint_indices"] = df["generations"].apply(lambda x: list(range(len(x))))
         df = df.progress_apply(clean, axis=1)
 
         for prompt in PROMPT_NAMES:
@@ -298,7 +303,8 @@ def main():
     # RRS - don't switch the order of the next two lines!
     columns_to_add = get_columns_to_add(all_generations)
     dataset = dataset.select(all_generations[0].dataset_index.tolist())
-    dataset = dataset.remove_columns("changepoint_indices")
+    if "changepoint_indices" in dataset.column_names:
+        dataset = dataset.remove_columns("changepoint_indices")
     for column, value in columns_to_add.items():
         dataset = dataset.add_column(column, value)
 
