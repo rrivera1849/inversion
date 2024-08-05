@@ -171,6 +171,8 @@ def read_data(
 
 def create_dataset_dir() -> str:
     dataset_dirname = f"./datasets/{args.domain}_{args.tokenizer}_{args.max_num_samples}"
+    if args.stratified:
+        dataset_dirname += "_stratified"
     if args.debug:
         dataset_dirname += "_debug"
         
