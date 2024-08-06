@@ -10,9 +10,10 @@ class MixturePredictor(nn.Module):
     1. Is it a mixture or not?
     2. For each token, which mixture does it come from?
     """
-    def __init__(self):
+    def __init__(self, HF="roberta-large"):
         super().__init__()
-        HF = "roberta-large"
+        if HF != "roberta-large":
+            raise NotImplementedError("Only roberta-large is supported.")
         self.model = AutoModel.from_pretrained(HF)
         self.tokenizer = AutoTokenizer.from_pretrained(HF)
 
@@ -25,7 +26,6 @@ class MixturePredictor(nn.Module):
     def forward(
         self, 
         inputs: dict[str, torch.Tensor],
-        is_train: bool = True,
     ) -> dict[str, float]:
         result = {}
         batch_size = inputs["input_ids"].size(0)
