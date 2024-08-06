@@ -170,7 +170,8 @@ def read_data(
     return dataset_mixture
 
 def create_dataset_dir() -> str:
-    dataset_dirname = f"./datasets/{args.domain}_{args.tokenizer}_{args.max_num_samples}"
+    tokenizer = os.path.basename(args.tokenizer)
+    dataset_dirname = f"./datasets/{args.domain}_{tokenizer}_{args.max_num_samples}"
     if args.stratified:
         dataset_dirname += "_stratified"
     if args.debug:

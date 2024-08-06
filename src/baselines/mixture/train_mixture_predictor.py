@@ -1,9 +1,5 @@
 """TODO
-1. HuggingFace accelerate for multi-processing.
-2. Continuations (full machine) for training.
-3. Logging to file.
-4. Sequence prediction dependence on token prediction.
-5. Dataset should have LLM column and be split into validation and test beforehand.
+* Sequence prediction dependence on token prediction.
 """
 
 import pickle
@@ -32,7 +28,7 @@ from tqdm import tqdm
 from model import MixturePredictor
 
 parser = ArgumentParser()
-parser.add_argument("--dataset_dirname", type=str, 
+parser.add_argument("--dataset_dirname", type=str,
                     default="./datasets/all_roberta-large_250000_stratified/",
                     help="Directory containing the dataset files.")
 parser.add_argument("--experiment_id", type=str, default="debug",
@@ -70,8 +66,10 @@ class JSONLDataset(Dataset):
     def __getitem__(self, idx):
         return self.dataset.iloc[idx].to_dict()
     
-def get_dataloader(path, shuffle=True):
+def get_dataloader(path, shuffle=True, max_samples=None):
     dataset = JSONLDataset(path)
+    if max_samples is not None:
+        dataset = torch.utils.data.Subset(dataset, range(max_samples))
     return DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -179,7 +177,7 @@ def validation_step(
     write_tensorboard_logs: bool = True,
 ):
     num_validation_batches = 50 if args.debug else len(validation_dataloader)
-    pbar = tqdm(total=num_validation_batches, desc="Validation", unit="batch")
+    pbar = tqdm(total=num_validation_batches, desc="Validation", unit="batch", disable=not accelerator.is_local_main_process)
     model.eval()
 
     average_loss = 0.
@@ -208,7 +206,7 @@ def validation_step(
         pbar.set_description(f"Validation Loss: {output['loss'].item():.4f} | Seq Acc: {sequence_accuracy:.4f} | Tok F1: {token_mixture_f1:.4f}")
         pbar.update(1)
 
-        if i >= 49:
+        if args.debug and i >= 49:
             break
 
     pbar.close()
@@ -229,14 +227,15 @@ def validation_step(
             logging_dict[f"valid/token_mixture_{metric_name}"] = np.mean(token_mixture_metric_values)
         accelerator.log(logging_dict, step=epoch)
 
-    print(colored(f"{'Validation Epoch':<20} {epoch+1}", "blue"))
-    print(colored(f"{'Loss':<20} {average_loss:.4f}", "cyan"))
-    print(colored(f"{'Seq Loss':<20} {average_sequence_loss:.4f}", "cyan"))
-    print(colored(f"{'Tok Loss':<20} {average_token_mixture_loss:.4f}", "cyan"))
-    for metric_name, metric_values in metric_accumulators.items():
-        sequence_metric_values, token_mixture_metric_values = zip(*metric_values)
-        print(colored(f"{'Seq '+metric_name:<20} {np.mean(sequence_metric_values):.4f}", "cyan"))
-        print(colored(f"{'Tok '+metric_name:<20} {np.mean(token_mixture_metric_values):.4f}", "cyan"))
+    if accelerator.is_main_process:
+        print(colored(f"{'Validation Epoch':<20} {epoch+1}", "blue"))
+        print(colored(f"{'Loss':<20} {average_loss:.4f}", "cyan"))
+        print(colored(f"{'Seq Loss':<20} {average_sequence_loss:.4f}", "cyan"))
+        print(colored(f"{'Tok Loss':<20} {average_token_mixture_loss:.4f}", "cyan"))
+        for metric_name, metric_values in metric_accumulators.items():
+            sequence_metric_values, token_mixture_metric_values = zip(*metric_values)
+            print(colored(f"{'Seq '+metric_name:<20} {np.mean(sequence_metric_values):.4f}", "cyan"))
+            print(colored(f"{'Tok '+metric_name:<20} {np.mean(token_mixture_metric_values):.4f}", "cyan"))
 
     return average_loss
 
@@ -311,14 +310,15 @@ def main():
             accelerator,
             n_train_iter
         )
+        average_val_loss = validation_step(
+            valid_dataloader,
+            model,
+            accelerator,
+            epoch
+        )
+        average_val_loss = accelerator.gather(torch.FloatTensor([average_val_loss]).to(accelerator.device)).mean().item()
+
         if accelerator.is_main_process:
-            average_val_loss = validation_step(
-                valid_dataloader,
-                model,
-                accelerator,
-                epoch
-            )
-            
             metadata = {
                 "epoch": epoch,
                 "loss": average_val_loss,
