@@ -34,7 +34,7 @@ parser.add_argument("--train_suffix", type=str, default="")
 parser.add_argument("--num_epoch", type=int, default=20)
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--learning_rate", type=float, default=5e-5)
-parser.add_argument("--method", type=str, default="fixed_weight", nargs="+",
+parser.add_argument("--method", type=str, default=[], nargs="+",
                     choices=["fixed_weight", "learned_weight", "learned_weight_no_bias", "mixture_embeddings"],
                     help="Methods to use when incorporating Mixture Predictor weights.")
 parser.add_argument("--token_mixture_multiplier", type=float, default=1.0)
