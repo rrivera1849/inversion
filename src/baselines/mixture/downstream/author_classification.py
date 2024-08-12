@@ -1,17 +1,4 @@
-"""
-To Implement:
-1. Aggregation Methods
-    - Learned Aggregation
-        - With / Without Mixture Predictor
-    - <human> and <machine> embeddings
-2. Save Model, Evaluate on Multiple Test Sets
 
-Modes:
-- Human / Mixed / LLM
-    - With / Without Mixture Predictor
-    
-- On -> Human / Mixed / LLM with Mixture Predictor if Mixture Predictor was used
-"""
 import json
 import os
 import sys
@@ -38,6 +25,7 @@ parser.add_argument("--method", type=str, default=[], nargs="+",
                     choices=["fixed_weight", "learned_weight", "learned_weight_no_bias", "mixture_embeddings"],
                     help="Methods to use when incorporating Mixture Predictor weights.")
 parser.add_argument("--token_mixture_multiplier", type=float, default=1.0)
+parser.add_argument("--seed", type=int, default=43)
 args = parser.parse_args()
 
 DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
@@ -77,7 +65,6 @@ class Classifier(nn.Module):
         self, 
         inputs: dict
     ) -> dict:
-        
         input_embeddings = self.model.embeddings.word_embeddings(inputs["input_ids"])
         if "mixture_embeddings" in args.method:
             assert "human_probs" in inputs and "machine_probs" in inputs
@@ -182,6 +169,9 @@ def get_dataset_distribution_name(name: str):
         return "mixed"
     elif name.endswith(".token_mixture_preds") or name == "":
         return "human" 
+    elif "uniform" in name or "oracle" in name:
+        split_suffix = name.split(".")
+        return get_dataset_distribution_name(".".join(split_suffix[:-1])) + "-" + split_suffix[-1]
     else:
         raise ValueError(f"Invalid dataset distribution name: {name}")
 
@@ -199,13 +189,14 @@ def main():
     
     fr = get_dataset_distribution_name(args.train_suffix)
     run_id = f"{fr}"
-    if "token_mixture_preds" in args.train_suffix:
+    if any([name in args.train_suffix for name in ["token_mixture_preds", "uniform", "oracle"]]):
         run_id += f"_weight={args.token_mixture_multiplier}"
         method_str = "-".join(args.method)
         run_id += f"_method={method_str}"
     run_name = f"{run_id}_{num_epoch}_{batch_size}_{learning_rate}"
     print(colored(f"run_name: {run_name}", "cyan"))
-    experiment_dir = f"./outputs/author_classification_100/{run_name}"
+
+    experiment_dir = f"./outputs/author_classification_100/{run_name}/{args.seed}"
 
     project_config = ProjectConfiguration(
         project_dir=experiment_dir,
@@ -294,6 +285,10 @@ def main():
     suffixes = ["", ".mistral", ".mistral.mixed"]
     if "token_mixture_preds" in args.train_suffix:
         suffixes = [suffix + ".token_mixture_preds" for suffix in suffixes]
+    if "uniform" in args.train_suffix:
+        suffixes = [suffix + ".uniform" for suffix in suffixes]
+    if "oracle" in args.train_suffix:
+        suffixes = [suffix + ".oracle" for suffix in suffixes]
     for suffix in suffixes:
         test_fname = os.path.join(DATA_PATH, f"test.jsonl{suffix}")
         print(colored(f"test_fname: {test_fname}", "yellow"))
@@ -314,7 +309,7 @@ def main():
         if accelerator.is_main_process:
             print(colored(f"Average accuracy on test set: {average_accuracy}", "green"))
 
-        dist_name = get_dataset_distribution_name(test_fname)
+        dist_name = get_dataset_distribution_name(suffix)
         save_fname = f"results_{dist_name}.json"
         with open(os.path.join(experiment_dir, save_fname), "w") as f:
             json.dump({"test_accuracy": average_accuracy}, f, indent=4)
@@ -322,5 +317,5 @@ def main():
     return 0
 
 if __name__ == "__main__":
-    set_seed(43)
+    set_seed(args.seed)
     sys.exit(main())
