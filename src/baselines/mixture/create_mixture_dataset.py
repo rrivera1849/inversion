@@ -12,6 +12,7 @@ from argparse import ArgumentParser
 from collections import Counter
 
 from datasets import load_from_disk
+from typing import Union
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
@@ -21,18 +22,25 @@ random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--max_num_samples", type=int, default=250_000,
-                    help="Maximum number of samples to use for the dataset.")
+                    help="Maximum number of samples to use for the dataset (Positive / Negative only). "
+                         "In the case of the inverse, we derive the data from the positive samples, "
+                         "so we have exactly the number of samples.")
 parser.add_argument("--stratified", default=False, action="store_true",
                     help="Whether to sample the dataset stratified by domain.")
 parser.add_argument("--tokenizer", type=str, default="roberta-large",
                     help="Tokenizer to use for the dataset.")
 parser.add_argument("--domain", type=str, default="all",
-                    choices=["all", "books", "news", "wiki", "reddit", "recipes", "poetry", "abstracts", "reviews", "s2orc"],
+                    choices=["all", "books", "news", "wiki", "reddit", "recipes", 
+                             "poetry", "abstracts", "reviews", "s2orc"],
                     help="Domains to use when creating the dataset.")
+parser.add_argument("--is_inverse_data", default=False, action="store_true",
+                    help="Whether to create the dataset for the inverse rephrase task.")
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
-DATASET_ELEM_TYPE = tuple[str, str, tuple[int, list[int]]]
+DATASET_ELEM_TYPE = tuple[Union[str, tuple[str, str]], str, tuple[int, list[int]]]
+# is_inverse_data = False -> (text, domain, (label, tagger_labels))
+# is_inverse_data = True -> ((text, generation), domain, (label, tagger_labels))
     
 def get_text_subset(text: str, tokenizer: AutoTokenizer, max_length: int = 510):
     return tokenizer.decode(tokenizer(text)["input_ids"][1:-1][:max_length], skip_special_tokens=True)
@@ -40,8 +48,8 @@ def get_text_subset(text: str, tokenizer: AutoTokenizer, max_length: int = 510):
 def read_data(
     tokenizer: AutoTokenizer,
     from_s2orc: bool = False,
+    is_inverse_data: bool = False,
 ) -> DATASET_ELEM_TYPE:
-    # Returns: (text, domain, (label, tagger_labels))
 
     if from_s2orc:
         dirname = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
@@ -98,12 +106,20 @@ def read_data(
                 
                 tags = get_levenshtein_tags(generation, original, tokenizer.tokenize)
                 tag_labels = [int(tag != "KEEP") for tag in tags]
+    
+                generation_subset = get_text_subset(generation, tokenizer)
+                original_subset = get_text_subset(original, tokenizer)
 
-                text = get_text_subset(generation, tokenizer)
-                dataset_positive_samples.append((
-                    text, domain,
-                    (1, tag_labels[:len(tokenizer.tokenize(text))])
-                ))
+                if is_inverse_data:
+                    dataset_positive_samples.append((
+                        (generation_subset, original_subset), domain,
+                        (1, tag_labels[:len(tokenizer.tokenize(text))])
+                    ))
+                else:
+                    dataset_positive_samples.append((
+                        generation_subset, domain,
+                        (1, tag_labels[:len(tokenizer.tokenize(text))])
+                    ))
 
     N = min(len(dataset_negative_samples), len(dataset_positive_samples))
     dataset_negative_samples = random.sample(dataset_negative_samples, k=N)
@@ -117,6 +133,8 @@ def create_dataset_dir() -> str:
     dataset_dirname = f"./datasets/{args.domain}_{tokenizer}_{args.max_num_samples}"
     if args.stratified:
         dataset_dirname += "_stratified"
+    if args.is_inverse_data:
+        dataset_dirname += "_inverse"
     if args.debug:
         dataset_dirname += "_debug"
         
@@ -133,13 +151,24 @@ def save_dataset(
 ):
     with open(savename, "w+") as fout:
         for sample in dataset_mixture:
-            record = {
-                "text": sample[0],
-                "domain": sample[1],
-                "label": sample[-1][0],
-                "tagger_labels": sample[-1][1],
-            }
-            record.update(tokenizer(sample[0], max_length=512, truncation=True, padding="max_length"))
+            if args.is_inverse_data:
+                record = {
+                    "generation": sample[0][0],
+                    "original": sample[0][1],
+                    "domain": sample[1],
+                    "label": sample[-1][0],
+                    "tagger_labels": sample[-1][1],
+                }
+                record.update(tokenizer(record["generation"], max_length=512, truncation=True, padding="max_length"))
+            else:
+                record = {
+                    "text": sample[0],
+                    "domain": sample[1],
+                    "label": sample[-1][0],
+                    "tagger_labels": sample[-1][1],
+                }
+                record.update(tokenizer(record["text"], max_length=512, truncation=True, padding="max_length"))
+
             fout.write(json.dumps(record)); fout.write('\n')
 
 def main():
@@ -152,9 +181,9 @@ def main():
     print("Reading data...")
     dataset_mixture = []
     if args.domain == "all" or args.domain == "s2orc":
-        dataset_mixture += read_data(tokenizer, from_s2orc=True)
+        dataset_mixture += read_data(tokenizer, from_s2orc=True, is_inverse_data=args.is_inverse_data)
     if args.domain != "s2orc":
-        dataset_mixture += read_data(tokenizer, from_s2orc=False)
+        dataset_mixture += read_data(tokenizer, from_s2orc=False, is_inverse_data=args.is_inverse_data)
     assert len(dataset_mixture) > 0
     random.shuffle(dataset_mixture)
     
@@ -176,6 +205,10 @@ def main():
         dataset_mixture = dataset_stratified
 
     dataset_mixture = dataset_mixture[:2 * args.max_num_samples]
+
+    if args.is_inverse_data:
+        dataset_mixture = [sample for sample in dataset_mixture if isinstance(sample[0], tuple)]
+        dataset_mixture = dataset_mixture[:args.max_num_samples]
 
     print("Saving dataset...")
     train_size = int(0.70 * len(dataset_mixture))
