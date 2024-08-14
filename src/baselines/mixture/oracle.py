@@ -51,18 +51,18 @@ for split in split_names:
     df_mixed["token_mixture_preds"] = tags_mixed
     
     df_orig["token_mixture_preds"] = df_orig["syms"].apply(lambda x: [[1.0, 1.0]] * len(tokenizer.tokenize(x)))
-    df_orig.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.oracle"), orient="records", lines=True)
+    # df_orig.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.oracle"), orient="records", lines=True)
     df_orig["token_mixture_preds"] = df_orig["syms"].apply(lambda x: [[random.uniform(0, 1), random.uniform(0, 1)] for _ in tokenizer.tokenize(x)])
-    df_orig.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.uniform"), orient="records", lines=True)
+    # df_orig.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.uniform"), orient="records", lines=True)
     
-    df_gen.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.oracle"), orient="records", lines=True)
-    df_mixed.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.mixed.oracle"), orient="records", lines=True)
+    # df_gen.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.oracle"), orient="records", lines=True)
+    # df_mixed.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.mixed.oracle"), orient="records", lines=True)
 
     # While we're here we can also do our uniform baseline
     df_gen["token_mixture_preds"] = df_gen["token_mixture_preds"].apply(lambda x: [[random.uniform(0, 1), random.uniform(0, 1)] for _ in x])
     df_mixed["token_mixture_preds"] = df_mixed["token_mixture_preds"].apply(lambda x: [[random.uniform(0, 1), random.uniform(0, 1)] for _ in x])
 
-    df_gen.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.uniform"), orient="records", lines=True)
-    df_mixed.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.mixed.uniform"), orient="records", lines=True)
+    # df_gen.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.uniform"), orient="records", lines=True)
+    # df_mixed.to_json(os.path.join(DATA_PATH, f"{split}.jsonl.mistral.mixed.uniform"), orient="records", lines=True)
 
     
