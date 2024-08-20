@@ -165,6 +165,10 @@ def gather_single_value(value: float, accelerator: Accelerator) -> float:
 def get_dataset_distribution_name(name: str):
     if name.endswith(".mistral") or name.endswith(".mistral.token_mixture_preds"):
         return "mistral"
+    elif name.endswith(".mistral.inverse"):
+        return "mistral-inverse"
+    elif name.endswith(".mistral.inverse-mixture"):
+        return "mistral-inverse-mixture"
     elif name.endswith(".mistral.mixed") or name.endswith(".mistral.mixed.token_mixture_preds"):
         return "mixed"
     elif name.endswith(".token_mixture_preds") or name == "":
