@@ -1,6 +1,75 @@
 
 import Levenshtein
+import torch.nn.functional as F
+from accelerate import Accelerator
+from termcolor import colored
 from transformers import AutoTokenizer
+from tqdm import tqdm
+
+from model import MixturePredictor
+
+def load_mixture_predictor():
+    model = MixturePredictor()
+    accelerator = Accelerator()
+    model = accelerator.prepare(model)
+    print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
+    accelerator.load_state("./outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
+    model.eval()
+    return model
+
+def get_mixture_weights(
+    model: MixturePredictor,
+    data: list,
+    key: str = "generation",
+    batch_size: int = 32,
+    return_sequence_probs: bool = False,
+    progress_bar: bool = True,
+):
+    if key is not None:
+        text = [d[key] for d in data]
+    else:
+        text = data
+    all_seq_preds = []
+    all_token_preds = []
+
+    if progress_bar:
+        iterator = tqdm(range(0, len(data), batch_size))
+    else:
+        iterator = range(0, len(data), batch_size)
+        
+    for i in iterator:
+        batch = text[i:i+batch_size]
+        sequence_preds, token_preds = model.predict(batch)
+        all_seq_preds.extend(sequence_preds)
+        all_token_preds.extend(token_preds)
+
+    all_token_preds = [F.softmax(pred, dim=-1) for pred in all_token_preds]
+    all_token_preds = [pred.cpu().tolist() for pred in all_token_preds]
+
+    if return_sequence_probs:
+        all_seq_preds = [F.softmax(pred, dim=-1) for pred in all_seq_preds]
+        all_seq_preds = [pred.cpu().tolist() for pred in all_seq_preds]
+        return all_seq_preds, all_token_preds
+
+    return all_token_preds
+
+def build_inverse_prompt(
+    generation: str,
+    original: str,
+    tokens: list[list[str]] = None,
+    mixture_probs: list[list[tuple[int, int]]] = None,
+) -> str:
+    instruction = "Rephrase:"
+    if tokens is not None and mixture_probs is not None:
+        token_and_probs = ""
+        for token, probs in zip(tokens, mixture_probs):
+            token_and_probs += f"{token}[{probs[0]:.2f}], "
+        token_and_probs = token_and_probs[:-2]
+        instruction = f"""Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]
+        {token_and_probs}
+        Rephrase: """
+    prompt = f"[INST] {instruction} {generation}  [/INST] \\n Output: {original}"
+    return prompt
 
 def get_levenshtein_tags(
     string1: str, 

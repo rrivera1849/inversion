@@ -13,10 +13,7 @@ from argparse import ArgumentParser
 from collections import OrderedDict
 from typing import Dict, Union
 
-import numpy as np
 import torch
-import torch.nn.functional as F
-from accelerate import Accelerator
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from termcolor import colored
 from transformers import (
@@ -29,7 +26,7 @@ from transformers import (
 )
 from tqdm import tqdm
 
-from model import MixturePredictor
+from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor
 
 random.seed(43)
 
@@ -111,33 +108,6 @@ def load_model():
     peft_model.print_trainable_parameters()
     return peft_model
 
-def load_mixture_predictor():
-    model = MixturePredictor()
-    accelerator = Accelerator()
-    model = accelerator.prepare(model)
-    print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
-    accelerator.load_state("./outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
-    model.eval()
-    return model
-
-def build_prompt(
-    generation: str,
-    original: str,
-    tokens: list[list[str]] = None,
-    mixture_probs: list[list[tuple[int, int]]] = None,
-) -> str:
-    instruction = "Rephrase:"
-    if tokens is not None and mixture_probs is not None:
-        token_and_probs = ""
-        for token, probs in zip(tokens, mixture_probs):
-            token_and_probs += f"{token}[{probs[0]:.2f}], "
-        token_and_probs = token_and_probs[:-2]
-        instruction = f"""Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]
-        {token_and_probs}
-        Rephrase: """
-    prompt = f"[INST] {instruction} {generation}  [/INST] \\n Output: {original}"
-    return prompt
-
 def tokenize_and_pad_to_fixed_length(
     sample: str
 ) -> Dict[str, list[int]]:
@@ -178,16 +148,17 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
         train_weights = get_mixture_weights(mixture_predictor, train_data)
         valid_weights = get_mixture_weights(mixture_predictor, valid_data)
         train_weights = mix_gold_labels(train_weights, train_data)
-        valid_weights = mix_gold_labels(valid_weights, valid_data)
+        # RRS - shouldn't mix gold labels in validation data!
+        # valid_weights = mix_gold_labels(valid_weights, valid_data)
 
         train_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(train_data)]
         valid_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(valid_data)]
 
-        train_text = [build_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(train_data, train_data_tokens, train_weights)]
-        valid_text = [build_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(valid_data, valid_data_tokens, valid_weights)]
+        train_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(train_data, train_data_tokens, train_weights)]
+        valid_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(valid_data, valid_data_tokens, valid_weights)]
     else:
-        train_text = [build_prompt(data["generation"], data["original"]) for data in train_data]
-        valid_text = [build_prompt(data["generation"], data["original"]) for data in valid_data]
+        train_text = [build_inverse_prompt(data["generation"], data["original"]) for data in train_data]
+        valid_text = [build_inverse_prompt(data["generation"], data["original"]) for data in valid_data]
 
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
@@ -202,21 +173,6 @@ def mix_gold_labels(
             gold_labels = [[abs(1 - label), label] for label in data[i]["tagger_labels"]]
             weights[i] = gold_labels
     return weights
-
-def get_mixture_weights(
-    model: MixturePredictor,
-    data: list,
-    batch_size: int = 32,
-):
-    text = [d["generation"] for d in data]
-    all_token_preds = []
-    for i in tqdm(range(0, len(data), batch_size)):
-        batch = text[i:i+batch_size]
-        _, token_preds = model.predict(batch)
-        all_token_preds.extend(token_preds)
-    all_token_preds = [F.softmax(pred, dim=-1) for pred in all_token_preds]
-    all_token_preds = [pred.cpu().tolist() for pred in all_token_preds]
-    return all_token_preds
 
 def get_run_name(train_samples):
     run_name_items = OrderedDict({
@@ -251,7 +207,7 @@ def main():
     run_name = get_run_name(train_samples)
     print(colored(f"run_name={run_name}", "cyan"))
     
-    output_dir = os.path.join("/scratch1/yubnub/changepoint/output/inverse", run_name)
+    output_dir = os.path.join("/data1/yubnub/changepoint/models/inverse", run_name)
     os.makedirs(output_dir, exist_ok=True)
 
     peft_model = load_model()
