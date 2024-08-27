@@ -3,6 +3,10 @@
 Good Tutorial on QLoRA for Fine-Tuning LLMs: https://mlflow.org/docs/latest/llms/transformers/tutorials/fine-tuning/transformers-peft.html
 """
 
+# I want Train on Rephrases -> Test on Human
+# I want Train on Human -> Test on Human 
+# I want Train on 50% Rephrases + 50% Human -> Test on Human
+
 import os
 import random
 import sys
@@ -34,7 +38,6 @@ parser.add_argument("--dirname", type=str,
                     default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--prompt", type=str, default="none",
-                    choices=PROMPT_NAMES + ["none", "all"],
                     help="Which prompt-type to train on. If 'all', will train a single model on all types.")
 
 parser.add_argument("--num_samples", type=int, default=100_000,
@@ -110,6 +113,16 @@ def tokenize_and_pad_to_fixed_length(
     result["labels"] = result["input_ids"].copy()
     return result
 
+def get_prompt_type(key: str) -> str:
+    if "rephrase_with_context" in key:
+        return "rephrase_with_context"
+    elif "rephrase" in key:
+        return "rephrase"
+    elif "continuation" in key:
+        return "continuation"
+    else:
+        return "none"
+
 def load_dataset() -> Union[list[Dict[str, list[int]]]]:
     dataset = load_from_disk(os.path.join(args.dirname, "train_clean_and_joined"))
     if args.debug:
@@ -117,20 +130,47 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
 
     if args.prompt == "none":
         keys = ["units"]
+    elif "+" in args.prompt:
+        # Format: <PROMPT>-<Perc>+<PROMPT>-<Perc>
+        prompt_type_1, prompt_type_2 = args.prompt.split("+")
+        prompt_type_1, percentage_1 = prompt_type_1.split("-")
+        prompt_type_2, percentage_2 = prompt_type_2.split("-")
+        percentage_1 = float(percentage_1)
+        percentage_2 = float(percentage_2)
+        assert percentage_1 + percentage_2 == 1.0, "Percentages must sum to 1.0."
+        keys = []
+        keys.extend([key for key in dataset[0].keys() if f"{prompt_type_1}_generations" in key])
+        keys.extend([key for key in dataset[0].keys() if f"{prompt_type_2}_generations" in key])
+        if prompt_type_1 == "none" or prompt_type_2 == "none":
+            keys.append("units")
     else:
         keys = [key for key in dataset[0].keys() if f"{args.prompt}_generations" in key]
     
     text = []
+    prompt_types = []
     for i in tqdm(range(len(dataset))):
         for key in keys:
             N = int(args.units_perc_per_sample * len(dataset[i][key]))
             text.extend(random.sample(dataset[i][key], k=N))
+            prompt_types.extend([get_prompt_type(key)] * N)
             
-    text = text[:args.num_samples]
+    unique_prompt_types = list(set(prompt_types))
+    if len(unique_prompt_types) > 1:
+        assert len(unique_prompt_types) == 2, "Only two prompt types are supported."
+        sample_size = args.num_samples // 2
+        sampled_text = []
+        prompt_type_1_text = [text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[0]]
+        sampled_text.extend(random.sample([text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[0]], k=sample_size))
+        sampled_text.extend(random.sample([text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[1]], k=sample_size))
+        random.shuffle(sampled_text)
+        text = sampled_text
+    else:
+        text = text[:args.num_samples]
+
     train_size = int(len(text) * 0.9)
     train_text = text[:train_size]
     test_text = text[train_size:]
-    
+        
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     test_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(test_text)]
 
