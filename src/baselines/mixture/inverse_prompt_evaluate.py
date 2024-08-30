@@ -6,6 +6,9 @@ random.seed(43)
 import evaluate
 import pandas as pd
 
+def string_exact_match(s1: str, s2: str) -> bool:
+    return s1 == s2
+
 rouge = evaluate.load('rouge')
 metrics = {}
 it = 0
