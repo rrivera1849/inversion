@@ -3,6 +3,8 @@ import os
 import random
 random.seed(43)
 
+from sentence_transformers import SentenceTransformer, util
+
 import evaluate
 import pandas as pd
 
@@ -10,6 +12,7 @@ def string_exact_match(s1: str, s2: str) -> bool:
     return s1 == s2
 
 rouge = evaluate.load('rouge')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 metrics = {}
 it = 0
 for filename in os.listdir("./prompting_data/"):
@@ -34,7 +37,20 @@ for filename in os.listdir("./prompting_data/"):
     metrics[name]["rouge2"] = results["rouge2"]
     metrics[name]["rougeL"] = results["rougeL"]
 
+    # Compute SBERT similarity
+    embeddings1 = model.encode(candidates, convert_to_tensor=True)
+    embeddings2 = model.encode(references, convert_to_tensor=True)
+    cosine_scores = util.pytorch_cos_sim(embeddings1, embeddings2)
+    avg_sbert_similarity = cosine_scores.diag().mean().item()
+    metrics[name]["sbert_similarity"] = avg_sbert_similarity
+
     if it == 0:
+        # Compute SBERT similarity for random shuffle
+        embeddings1_random = model.encode(candidates, convert_to_tensor=True)
+        embeddings2_random = model.encode(references, convert_to_tensor=True)
+        cosine_scores_random = util.pytorch_cos_sim(embeddings1_random, embeddings2_random)
+        avg_sbert_similarity_random = cosine_scores_random.diag().mean().item()
+        metrics["random"]["sbert_similarity"] = avg_sbert_similarity_random
         random.shuffle(candidates)
         metrics["random"] = {}
         results = rouge.compute(predictions=candidates, references=references)
