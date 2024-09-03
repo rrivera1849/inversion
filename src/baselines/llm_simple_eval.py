@@ -21,7 +21,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 
 from mixture.model import MixturePredictor
-from utils import load_MTD_data, compute_metrics, load_model, MODELS
+from utils import load_s2orc_MTD_data, compute_metrics, load_model, MODELS
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
@@ -206,7 +206,7 @@ def get_bino_scores(
     return [-score for score in scores]
 
 def main():
-    texts, models, prompts = load_MTD_data(args.dirname, debug=args.debug)
+    texts, models, prompts = load_s2orc_MTD_data(args.dirname, debug=args.debug)
 
     if args.only_rephrases:
         indices_to_keep = [i for i, prompt in enumerate(prompts) if prompt is None or prompt == "rephrase"]

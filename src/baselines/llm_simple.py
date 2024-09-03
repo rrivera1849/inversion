@@ -57,13 +57,10 @@ parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
 # each unit should be at most 128 tokens
-MAX_LENGTH = 128 + 32
 MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,
-    model_max_lenght=MAX_LENGTH,
-    padding_side="left", # left padding solves the following problem: the quick brown <PAD> --> prediction uses PAD token 
     add_eos_token=True,
 )
 tokenizer.pad_token = tokenizer.eos_token
@@ -101,15 +98,19 @@ peft_config = LoraConfig(
 peft_model = get_peft_model(model, peft_config)
 peft_model.print_trainable_parameters()
 
-def tokenize_and_pad_to_fixed_length(
-    sample: str
-) -> Dict[str, list[int]]:
-    result = tokenizer(
-        sample,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        padding="max_length",
-    )
+def group_texts(examples, block_size=128):
+    # Concatenate all texts.
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+    # customize this part to your needs.
+    if total_length >= block_size:
+        total_length = (total_length // block_size) * block_size
+    # Split by chunks of block_size.
+    result = {
+        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+        for k, t in concatenated_examples.items()
+    }
     result["labels"] = result["input_ids"].copy()
     return result
 
@@ -159,7 +160,6 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
         assert len(unique_prompt_types) == 2, "Only two prompt types are supported."
         sample_size = args.num_samples // 2
         sampled_text = []
-        prompt_type_1_text = [text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[0]]
         sampled_text.extend(random.sample([text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[0]], k=sample_size))
         sampled_text.extend(random.sample([text for i, text in enumerate(text) if prompt_types[i] == unique_prompt_types[1]], k=sample_size))
         random.shuffle(sampled_text)
@@ -191,42 +191,56 @@ def main():
     print(colored(f"len(train_samples)={len(train_samples)}", "blue"))
     print(colored(f"len(test_samples)={len(test_samples)}", "blue"))
     
-    run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-ns={args.num_samples}-debug={args.debug}"
-    output_dir = os.path.join("/scratch1/yubnub/changepoint/output", run_name)
-    os.makedirs(output_dir, exist_ok=True)
+    # run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-ns={args.num_samples}-debug={args.debug}"
+    # output_dir = os.path.join("/scratch1/yubnub/changepoint/output", run_name)
+    # os.makedirs(output_dir, exist_ok=True)
 
-    training_args = TrainingArguments(
-        report_to="mlflow",
-        run_name=run_name,
-        output_dir=output_dir,
-        per_device_train_batch_size=128,
-        gradient_accumulation_steps=2,
-        gradient_checkpointing=True,
-        optim="paged_adamw_8bit",
-        bf16=True,
-        learning_rate=2e-5,
-        lr_scheduler_type="constant",
-        max_steps=3000,
-        save_steps=200,
-        logging_steps=100,
-        warmup_steps=10,
-        # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
-        ddp_find_unused_parameters=False,
-    )
-
-    trainer = Trainer(
-        model=peft_model,
-        train_dataset=train_samples,
-        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
-        args=training_args,
-    )
-    # use_cache=True is incompatible with gradient checkpointing.
     peft_model.config.use_cache = False
     
-    trainer.train()
+    data_loader = torch.utils.data.DataLoader(
+        train_samples,
+        batch_size=8,
+        shuffle=True,
+        collate_fn=DataCollatorForLanguageModeling(tokenizer, mlm=False),
+    )
+
+    for batch in data_loader:
+        labels = batch.pop("labels")
+        out = model(**batch)
+        import pdb; pdb.set_trace()
+        break
+
+    # training_args = TrainingArguments(
+    #     report_to="mlflow",
+    #     run_name=run_name,
+    #     output_dir=output_dir,
+    #     per_device_train_batch_size=128,
+    #     gradient_accumulation_steps=2,
+    #     gradient_checkpointing=True,
+    #     optim="paged_adamw_8bit",
+    #     bf16=True,
+    #     learning_rate=2e-5,
+    #     lr_scheduler_type="constant",
+    #     max_steps=3000,
+    #     save_steps=200,
+    #     logging_steps=100,
+    #     warmup_steps=10,
+    #     # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
+    #     ddp_find_unused_parameters=False,
+    # )
+
+    # trainer = Trainer(
+    #     model=peft_model,
+    #     train_dataset=train_samples,
+    #     data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
+    #     args=training_args,
+    # )
+    # # use_cache=True is incompatible with gradient checkpointing
     
-    test_metrics = trainer.evaluate(test_samples)
-    print(test_metrics)
+    # trainer.train()
+    
+    # test_metrics = trainer.evaluate(test_samples)
+    # print(test_metrics)
 
 if __name__ == "__main__":
     sys.exit(main())
