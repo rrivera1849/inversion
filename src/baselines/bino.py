@@ -16,12 +16,12 @@ from tqdm import tqdm
 
 from fast_detect_gpt import get_sampling_discrepancy_analytic, get_sampling_discrepancy
 from mixture.model import MixturePredictor
-from utils import load_MTD_data, compute_metrics, load_model, MODELS
+# from mixture.utils import load_mixture_predictor
+from utils import load_s2orc_MTD_data, compute_metrics, load_model, MODELS, load_author_data, load_inverse_data
 
 parser = ArgumentParser()
-parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
-                    help="Directory where the dataset is stored.")
+parser.add_argument("--dataset_name", type=str, default="s2orc_MTD",
+                    choices=["author_100", "s2orc_MTD", "inverse"])
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--debug", default=False, action="store_true",
                     help="If True, will process only a few samples.")
@@ -55,21 +55,13 @@ def get_rank(text, base_model, base_tokenizer, log=False):
 def get_bino_scores(
     text: list[str],
     batch_size: int = 32,
-    reference_model_id: str = None,
 ) -> list[float]:
     """Compute Bino scores for a list of text
     """
-    if reference_model_id:
-        bino = Binoculars(
-            observer_name_or_path=reference_model_id,
-            performer_name_or_path="mistralai/Mistral-7B-v0.3",
-            tokenizer_model_id="mistralai/Mistral-7B-v0.3",
-        )
-    else:
-        bino = Binoculars(
-            observer_name_or_path="tiiuae/falcon-7b",
-            performer_name_or_path="tiiuae/falcon-7b-instruct",
-        )
+    bino = Binoculars(
+        observer_name_or_path="tiiuae/falcon-7b",
+        performer_name_or_path="tiiuae/falcon-7b-instruct",
+    )
     scores = []
     for i in tqdm(range(0, len(text), batch_size)):
         batch = text[i:i+batch_size]
@@ -166,12 +158,13 @@ def get_RADAR_scores(
 def get_mixture_predictor_scores(
     text: list[str],
     batch_size: int = 32,
-):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+):  
+    from accelerate import Accelerator
     model = MixturePredictor()
-    state_dict = torch.load("./mixture/outputs/mixture_baseline_nocontinuation/checkpoints/best.pth")["model"]
-    model.load_state_dict(state_dict)
-    model.to(device)
+    accelerator = Accelerator()
+    model = accelerator.prepare(model)
+    print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
+    accelerator.load_state("./mixture/outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
     model.eval()
     
     probabilities = []
@@ -250,52 +243,21 @@ def get_fast_detect_gpt_scores(
         scores.append(discrepancy)
     return scores
 
-
-@torch.no_grad()
-def get_discrepancy_with_most_likely(
-    text: list[str],
-):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, tokenizer = load_model(MODELS["rephrase"])
-    reference_model, reference_tokenizer = load_model(MODELS["human"])
-
-    loss_fn = torch.nn.CrossEntropyLoss()
-    scores = []
-    for sample in tqdm(text):
-        tok = tokenizer(
-            sample, 
-            truncation=True, 
-            return_tensors="pt", 
-        ).to(device)
-        tok["labels"] = tok["input_ids"].clone()
-        out = model(**tok)
-        base_perplexity = out.loss.exp().item()
-
-        tok = reference_tokenizer(
-            sample, 
-            truncation=True, 
-            return_tensors="pt", 
-        ).to(device)
-        tok["labels"] = tok["input_ids"].clone()
-        out = reference_model(**tok)
-        reference_perplexity = out.loss.exp().item()
-        
-        scores.append(base_perplexity / reference_perplexity)
-        
-    return scores
-
 def main():
-    texts, models, prompts = load_MTD_data(args.dirname, debug=args.debug, debug_N=50)
-    
-    # TODO: Refactor to remove the repetition.
-    
-    # scores = get_bino_scores(texts, batch_size=args.batch_size, reference_model_id=MODELS["human"])
-    # scores = [-score for score in scores]
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("Binocular metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
+    if args.dataset_name == "s2orc_MTD":
+        texts, models, prompts = load_s2orc_MTD_data(debug=args.debug, debug_N=50)
+    elif args.dataset_name == "author_100":
+        texts, models, prompts = load_author_data(debug=args.debug, debug_N=50)
+    elif args.dataset_name == "inverse":
+        texts, models, prompts = load_inverse_data(debug=args.debug, debug_N=50)
+
+    scores = get_bino_scores(texts, batch_size=args.batch_size)
+    scores = [-score for score in scores]
+    metrics = compute_metrics(scores, models, prompts)
+    print()
+    print(colored("Binocular metrics:", "blue"))
+    for k, v in metrics.items():
+        print(colored(f"\t{k}: {v:.4f}", "green"))
 
     # scores = get_openai_detector_scores(texts, batch_size=args.batch_size)
     # metrics = compute_metrics(scores, models, prompts)
@@ -303,39 +265,25 @@ def main():
     # print(colored("OpenAI Detector metrics:", "blue"))
     # for k, v in metrics.items():
     #     print(colored(f"\t{k}: {v:.4f}", "green"))
-        
-    # scores = get_MSP_scores(texts)
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("MSP metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
-    
-    # scores = get_RADAR_scores(texts, batch_size=args.batch_size)
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("RADAR metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
-    
-    # scores = get_mixture_predictor_scores(texts, batch_size=args.batch_size)
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("MixturePredictor metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
 
-    # scores = get_fast_detect_gpt_scores(texts, base_model_id=MODELS["human"])
+    scores = get_RADAR_scores(texts, batch_size=args.batch_size)
+    metrics = compute_metrics(scores, models, prompts)
+    print()
+    print(colored("RADAR metrics:", "blue"))
+    for k, v in metrics.items():
+        print(colored(f"\t{k}: {v:.4f}", "green"))
+    
+    scores = get_mixture_predictor_scores(texts, batch_size=args.batch_size)
+    metrics = compute_metrics(scores, models, prompts)
+    print()
+    print(colored("MixturePredictor metrics:", "blue"))
+    for k, v in metrics.items():
+        print(colored(f"\t{k}: {v:.4f}", "green"))
+
+    # scores = get_fast_detect_gpt_scores(texts)
     # metrics = compute_metrics(scores, models, prompts, max_fpr=0.1)
     # print()
     # print(colored("FastDetectGpt metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
-
-    # scores = get_discrepancy_with_most_likely(texts)
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("Discrepancy with Most Likely metrics:", "blue"))
     # for k, v in metrics.items():
     #     print(colored(f"\t{k}: {v:.4f}", "green"))
 

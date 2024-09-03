@@ -1,9 +1,11 @@
 
+import json
 import os
 import sys
 from collections import Counter
 from typing import Union
 
+import numpy as np
 import torch
 from datasets import load_from_disk
 from sklearn.metrics import roc_auc_score
@@ -50,8 +52,8 @@ def load_model(
     
     return model, tokenizer
 
-def load_MTD_data(
-    dirname: str, 
+def load_s2orc_MTD_data(
+    dirname: str = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128", 
     debug: bool = False, 
     debug_N: int = 50,
 ) -> tuple[list[str], list[str], list[str]]:
@@ -89,6 +91,59 @@ def load_MTD_data(
 
     return texts, models, prompts
 
+def load_author_data(
+    author_data_dirname: str = "/data1/yubnub/data/iur_dataset/author_100.politics",
+    debug: bool = False,
+    debug_N: int = 50,
+):
+    """Loads a split from the Author 100 Politics dataset.
+    """
+    N = None
+    if debug:
+        N = debug_N
+        
+    # suffixes = ["", ".mistral", ".mistral.inverse", ".mistral.inverse-mixture", ".inverse-mixture-simple"]
+    # model_names = ["human", "machine", "machine", "machine", "machine"]
+    # prompt_names = ["human", "mistral", "inverse", "inverse-mixture", "inverse-mixture-simple"]
+    suffixes = ["", ".mistral.inverse-mixture-simple"]
+    model_names = ["human", "machine"]
+    prompt_names = ["human", "inverse-mixture-simple"]
+    texts, models, prompts = [], [], []
+    for i, suffix in enumerate(suffixes):
+        with open(os.path.join(author_data_dirname, f"test.jsonl{suffix}")) as fin:
+            for j, line in enumerate(fin):
+                if N is not None and j >= N:
+                    break
+                texts.append(json.loads(line)["syms"])
+                models.append(model_names[i])
+                prompts.append(prompt_names[i])
+
+    return texts, models, prompts    
+
+def load_inverse_data(
+    inverse_data_dirname: str = "/home/riverasoto1/repos/changepoint/src/baselines/mixture/prompting_data",
+    debug: bool = False,
+    debug_N: int = 50,
+):
+    texts = []
+    models = []
+    prompts = []
+    with open(os.path.join(inverse_data_dirname, "rephrases_gpt-4o-mini.jsonl")) as fin:
+        data = [json.loads(line) for line in fin]
+        texts.extend([elem["rephrase"] for elem in data])
+        models.extend(["gpt-4o"] * len(data))
+        prompts.extend(["rephrase"] * len(data))
+    with open(os.path.join(inverse_data_dirname, "inverse_prompts_gpt-4o-mini_keep=True.jsonl")) as fin:
+        data = [json.loads(line) for line in fin]
+        texts.extend([elem["inverse"] for elem in data])
+        models.extend(["gpt-4o"] * len(data))
+        prompts.extend(["inverse"] * len(data))
+        texts.extend([elem["unit"] for elem in data])
+        models.extend(["human"] * len(data))
+        prompts.extend(["human"] * len(data))
+        
+    return texts, models, prompts
+
 # def load_RAID_data(
 #     dirname: str, 
 #     debug: bool = False, 
@@ -100,10 +155,9 @@ def load_MTD_data(
 def compute_metrics(
     scores: list[float], 
     models: list[str], 
-    prompts: list[Union[None, str]],
+    prompts: list[Union[None, str]] = None,
     max_fpr: float = 0.01
 ) -> dict[str, float]:
-    assert len(scores) == len(models) == len(prompts)
 
     metrics: dict[str, float] = {}
     
@@ -113,11 +167,12 @@ def compute_metrics(
     labels = [0] * len(human_scores) + [1] * len(machine_scores)
     metrics[f"global AUC({max_fpr})"] = roc_auc_score(labels, human_scores + machine_scores, max_fpr=max_fpr)
 
-    for prompt in PROMPT_NAMES:
-        prompt_machine_scores = [score for i, score in enumerate(scores) if models[i] != "human" and prompts[i] == prompt]
-        if len(prompt_machine_scores) == 0:
-            continue
-        prompt_labels = [0] * len(human_scores) + [1] * len(prompt_machine_scores)
-        metrics[prompt + f" AUC({max_fpr})"] = roc_auc_score(prompt_labels, human_scores + prompt_machine_scores, max_fpr=max_fpr)
+    if prompts is not None:
+        for prompt in np.unique(prompts):
+            prompt_machine_scores = [score for i, score in enumerate(scores) if models[i] != "human" and prompts[i] == prompt]
+            if len(prompt_machine_scores) == 0:
+                continue
+            prompt_labels = [0] * len(human_scores) + [1] * len(prompt_machine_scores)
+            metrics[prompt + f" AUC({max_fpr})"] = roc_auc_score(prompt_labels, human_scores + prompt_machine_scores, max_fpr=max_fpr)
         
     return metrics
