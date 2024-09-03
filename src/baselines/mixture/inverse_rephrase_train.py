@@ -53,6 +53,8 @@ parser.add_argument("--lora_dropout", type=float, default=0.1,
 
 parser.add_argument("--use_mixture_weights", default=False, action="store_true",
                     help="Use mixture weights to condition the generation.")         
+parser.add_argument("--use_mixture_weights_no_probs", default=False, action="store_true",
+                    help="If True, will set up a simple prompt with the human tokens to keep, but nothing else.")
 parser.add_argument("--perc_gold_labels", type=float, default=0.5, 
                     help="Percentage of gold labels to use for conditioning the generation.")
  
@@ -61,6 +63,8 @@ args = parser.parse_args()
 
 if args.use_mixture_weights:
     MAX_LENGTH = 2048
+elif args.use_mixture_weights_no_probs:
+    MAX_LENGTH = 1024
 else:
     MAX_LENGTH = (128 + 32) * 2
 
@@ -142,9 +146,9 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             if N is not None and i >= N:
                 break
     
-    if args.use_mixture_weights:
+    if args.use_mixture_weights or args.use_mixture_weights_no_probs:
         mixture_predictor = load_mixture_predictor()
-        
+
         train_weights = get_mixture_weights(mixture_predictor, train_data)
         valid_weights = get_mixture_weights(mixture_predictor, valid_data)
         train_weights = mix_gold_labels(train_weights, train_data)
@@ -154,8 +158,8 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
         train_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(train_data)]
         valid_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(valid_data)]
 
-        train_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(train_data, train_data_tokens, train_weights)]
-        valid_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights) for data, tokens, weights in zip(valid_data, valid_data_tokens, valid_weights)]
+        train_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights, simple_prompt=args.use_mixture_weights_no_probs) for data, tokens, weights in zip(train_data, train_data_tokens, train_weights)]
+        valid_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights, simple_prompt=args.use_mixture_weights_no_probs) for data, tokens, weights in zip(valid_data, valid_data_tokens, valid_weights)]
     else:
         train_text = [build_inverse_prompt(data["generation"], data["original"]) for data in train_data]
         valid_text = [build_inverse_prompt(data["generation"], data["original"]) for data in valid_data]
@@ -185,6 +189,9 @@ def get_run_name(train_samples):
     })
     if args.use_mixture_weights:
         run_name_items["use-mixture-weights"] = args.use_mixture_weights
+        run_name_items["perc-gold-labels"] = args.perc_gold_labels
+    if args.use_mixture_weights_no_probs:
+        run_name_items["simple-prompt"] = args.use_mixture_weights_no_probs
         run_name_items["perc-gold-labels"] = args.perc_gold_labels
     run_name_items["debug"] = args.debug
     run_name = "Mistral-7B-v0.3-QLoRA"

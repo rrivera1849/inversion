@@ -53,6 +53,7 @@ FEWSHOT_HEADER="""Here are some examples of original passages and their rephrase
 
 """
 
+GPT_NAME = "gpt-4o"
 TOKENIZER = tiktoken.encoding_for_model("gpt-4o")
 DO_PROMPT = True
 
@@ -72,7 +73,7 @@ def query(
         return response
     
     completion = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=GPT_NAME,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant."},
                     {
@@ -139,10 +140,15 @@ def build_inverse_prompt(
 def build_fewshot_header(
     units: list[str],
     rephrases: list[str],
+    with_tokens_to_keep: bool = False,
 ) -> str:
     header = FEWSHOT_HEADER
     for unit, rephrase in zip(units, rephrases):
-        header += f"Rephrased: {rephrase}\nOriginal: {unit}\n\n"
+        if with_tokens_to_keep:
+            tokens_to_keep = get_tokens_to_keep(rephrase, unit)
+            header += f"Rephrased: {rephrase}\nTokens to keep when re-writing the passage: {tokens_to_keep}\nOriginal: {unit}\n\n"
+        else:
+            header += f"Rephrased: {rephrase}\nOriginal: {unit}\n\n"
     return header
 
 def get_tokens_to_keep(
@@ -181,7 +187,7 @@ def prompt_inverse(
         rephrased_units = [item for sublist in rephrased_units for item in sublist]
         rephrased_units = random.sample(rephrased_units, k=fewshot_N)
         
-        fewshot_header = build_fewshot_header(original_units, rephrased_units)
+        fewshot_header = build_fewshot_header(original_units, rephrased_units, with_tokens_to_keep)
 
     for i, record in enumerate(tqdm(rephrase_data)):
         unit = record["unit"] if with_tokens_to_keep else None
@@ -196,7 +202,8 @@ def prompt_inverse(
             # We use a few-shot prompt composed of units from the same paper:
             fewshot_header = build_fewshot_header(
                 record["fewshot_units"][:fewshot_N], 
-                record["rephrase_fewshot"][:fewshot_N]
+                record["rephrase_fewshot"][:fewshot_N],
+                with_tokens_to_keep=with_tokens_to_keep,
             )
             prompt = build_inverse_prompt(
                 record["rephrase"], 
@@ -254,33 +261,38 @@ if __name__ == "__main__":
     
     print("Prompting for Rephrases...")
     rephrase_data = load_or_create_data(
-        "rephrases.jsonl", 
+        f"rephrases_{GPT_NAME}.jsonl", 
         create_rephrase_data, 
         debug=debug,
         original_data=original_data,
         client=client,
     )
     
-    with_tokens_to_keep = [False, True]
-    for tokens_to_keep in with_tokens_to_keep:
-        print("Prompting for Inverses, KEEP={}...".format(tokens_to_keep))
-        inverse_data = load_or_create_data(
-            f"inverse_prompts_keep={tokens_to_keep}.jsonl", 
-            prompt_inverse, 
-            debug=debug,
-            rephrase_data=rephrase_data,
-            client=client,
-            with_tokens_to_keep=tokens_to_keep,
-        )
+    # with_tokens_to_keep = [False, True]
+    with_tokens_to_keep = [True]
+    # for tokens_to_keep in with_tokens_to_keep:
+    #     print("Prompting for Inverses, KEEP={}...".format(tokens_to_keep))
+    #     inverse_data = load_or_create_data(
+    #         f"inverse_prompts_{GPT_NAME}_keep={tokens_to_keep}.jsonl", 
+    #         prompt_inverse, 
+    #         debug=debug,
+    #         rephrase_data=rephrase_data,
+    #         client=client,
+    #         with_tokens_to_keep=tokens_to_keep,
+    #     )
 
+    # modes = ["random", "same_paper"]
     modes = ["random", "same_paper"]
     Ns = [1, 5]
     for tokens_to_keep in with_tokens_to_keep:
         for mode in modes:
             for N in Ns:
+                if N == 5 and mode == "same_paper":
+                    continue
+
                 print("Prompting for Few-Shot Inverses, mode={}, N={}, KEEP={}".format(mode, N, tokens_to_keep))
                 inverse_data_fewshot = load_or_create_data(
-                    f"inverse_prompts_fewshot_{mode}_{N}_keep={tokens_to_keep}.jsonl", 
+                    f"inverse_prompts_{GPT_NAME}_fewshot_{mode}_{N}_keep={tokens_to_keep}.jsonl", 
                     prompt_inverse, 
                     debug,
                     rephrase_data=rephrase_data,

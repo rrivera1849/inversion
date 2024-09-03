@@ -58,9 +58,22 @@ def build_inverse_prompt(
     original: str,
     tokens: list[list[str]] = None,
     mixture_probs: list[list[tuple[int, int]]] = None,
+    simple_prompt: bool = False,
 ) -> str:
     instruction = "Rephrase:"
-    if tokens is not None and mixture_probs is not None:
+    if simple_prompt and tokens is not None and mixture_probs is not None:
+        tokens_to_keep = "Keep these tokens while rephrasing, Ġ is a single space: "
+        added_tokens = False
+        for token, probs in zip(tokens, mixture_probs):
+            if probs[0] > 0.5:
+                tokens_to_keep += f"{token}, "
+                added_tokens = True
+                
+        if not added_tokens:
+            instruction = "Rephrase:"
+        else:
+            instruction = f"""{tokens_to_keep[:-2]}\n\nRephrase:"""
+    elif tokens is not None and mixture_probs is not None:
         token_and_probs = ""
         for token, probs in zip(tokens, mixture_probs):
             token_and_probs += f"{token}[{probs[0]:.2f}], "

@@ -15,30 +15,28 @@ from tqdm import tqdm
 from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor
 
 parser = ArgumentParser()
-parser.add_argument("--use_mixture_weights", action="store_true")
+parser.add_argument("--model_name", type=str, default="mixture_simple")
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
 DEBUG = args.debug
 NLP = spacy.load("en_core_web_sm")
 BATCH_SIZE = 8
-USE_MIXTURE_WEIGHTS = args.use_mixture_weights
+USE_MIXTURE_WEIGHTS = "mixture" in args.model_name
 AUTHOR_DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
 INVERSE_MODELS = {
     "no_mixture": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max_steps=1000_num_samples=25900_r=32_alpha=64_dropout=0.1_debug=False",
     "mixture": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=1000_num-samples=25900_r=32_alpha=64_dropout=0.1_use-mixture-weights=True_perc-gold-labels=0.5_debug=False",
+    "mixture_simple": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=1000_num-samples=25900_r=32_alpha=64_dropout=0.1_simple-prompt=True_perc-gold-labels=0.5_debug=False",
 }
 
 def load_inverse_model(
-    use_mixture_weights: bool = True
+    model_name: str = "no_mixture",
 ):
     """Loads our inversion model, either with or without Mixture Weights in the prompt.
     """
-    if use_mixture_weights:
-        inverse_model = INVERSE_MODELS["mixture"]
-    else:
-        inverse_model = INVERSE_MODELS["no_mixture"]
+    inverse_model = INVERSE_MODELS[model_name]
         
     checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, "checkpoint-1000")
     
@@ -81,7 +79,7 @@ def get_best_sentence_substring(
     substrings = [inverse_text[:sent.end_char] for sent in sentences]
     length_difference = [abs(len(original_text) - len(sub)) for sub in substrings]
     min_idx = length_difference.index(min(length_difference))
-    return substrings[min_idx]
+    return substrings[min_idx].strip()
 
 def main():
     
@@ -89,7 +87,7 @@ def main():
     mixture_token_fn = mixture_predictor.tokenizer.tokenize
     
     inverse_model, inverse_tokenizer = load_inverse_model(
-        use_mixture_weights=USE_MIXTURE_WEIGHTS,
+        args.model_name,
     )
     generation_config = GenerationConfig(
         do_sample=True,
@@ -98,11 +96,14 @@ def main():
         max_new_tokens=128+32,
     )
     
-    for split_name in ["train", "valid", "test"]:
+    # for split_name in ["train", "valid", "test"]:
+    for split_name in ["test"]:
         data = load_author_data(split_name)
         output_fname = os.path.join(AUTHOR_DATA_PATH, f"{split_name}.jsonl.mistral.inverse")
-        if USE_MIXTURE_WEIGHTS:
+        if USE_MIXTURE_WEIGHTS and "simple" not in args.model_name:
             output_fname += "-mixture"
+        elif "simple" in args.model_name:
+            output_fname += "-mixture-simple"
         output_fout = open(output_fname, "w+")
         print(f"Writing to {output_fname}")
         
@@ -125,7 +126,7 @@ def main():
 
             if USE_MIXTURE_WEIGHTS:
                 prompt_text = [
-                    build_inverse_prompt(t, "", mixture_token_fn(t), w)
+                    build_inverse_prompt(t, "", mixture_token_fn(t), w, simple_prompt="simple" in args.model_name)
                     for t, w in zip(text, mixture_out[1])
                 ]
             else:
