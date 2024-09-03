@@ -15,7 +15,7 @@ from termcolor import colored
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 
-from utils import load_MTD_data
+from utils import load_s2orc_MTD_data
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
@@ -54,7 +54,7 @@ def get_uar_embedding(
 def main():
     os.makedirs("LUAR_viz", exist_ok=True)
     
-    texts, model_names, prompt_names = load_MTD_data(args.dirname, debug=True, debug_N=100)
+    texts, model_names, prompt_names = load_s2orc_MTD_data(args.dirname, debug=True, debug_N=100)
     for i, prompt in enumerate(prompt_names):
         if prompt is None:
             prompt_names[i] = "human"
