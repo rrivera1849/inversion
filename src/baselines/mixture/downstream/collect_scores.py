@@ -33,7 +33,7 @@ def main():
     boxplot_scores = []
     boxplot_names = []
     for dirname in os.listdir(output_dir):
-        if "mixed" not in dirname and not dirname == "human_20_16_5e-05":
+        if "human" not in dirname and not dirname == "human_20_16_5e-05":
             continue
         # if "human" not in dirname or "mixture_embeddings" in dirname:
             # continue
@@ -47,8 +47,10 @@ def main():
             d = json.loads(open(fname, "r").read())
             scores.append(d["test_accuracy"])
 
-        boxplot_scores.append(scores)
-        boxplot_names.append(get_plot_name(os.path.basename(path)))
+        print(fname, scores[-1])
+
+        # boxplot_scores.append(scores)
+        # boxplot_names.append(get_plot_name(os.path.basename(path)))
     
     for name, scores in zip(boxplot_names, boxplot_scores):
         print(name + " {:.2f} ± {:.2f}".format(np.mean(scores), np.std(scores)))

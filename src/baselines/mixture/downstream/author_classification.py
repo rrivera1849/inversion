@@ -22,7 +22,7 @@ parser.add_argument("--num_epoch", type=int, default=20)
 parser.add_argument("--batch_size", type=int, default=16)
 parser.add_argument("--learning_rate", type=float, default=5e-5)
 parser.add_argument("--method", type=str, default=[], nargs="+",
-                    choices=["fixed_weight", "learned_weight", "learned_weight_no_bias", "mixture_embeddings"],
+                    choices=["fixed_weight", "learned_weight", "learned_weight_no_bias", "mixture_embeddings", "boostup"],
                     help="Methods to use when incorporating Mixture Predictor weights.")
 parser.add_argument("--token_mixture_multiplier", type=float, default=1.0)
 parser.add_argument("--seed", type=int, default=43)
@@ -30,6 +30,16 @@ args = parser.parse_args()
 
 DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
 
+class BoostUp(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        weights = torch.rand(x.size(0), x.size(1), 1).type_as(x)
+        weights = weights.expand(x.size())
+        out = x * (1. + args.token_mixture_multiplier * weights)
+        return out
+    
 def mean_pooling(
     token_embeddings: torch.Tensor, 
     attention_mask: torch.Tensor, 
@@ -53,6 +63,7 @@ class Classifier(nn.Module):
         self.model = AutoModel.from_pretrained("roberta-base", add_pooling_layer=False)
         self.classifier = nn.Linear(self.model.config.hidden_size, 100)
         self.loss = nn.CrossEntropyLoss()
+        self.boost = BoostUp()
 
         if "learned_weight" in args.method or "learned_weight_no_bias" in args.method:
             self.token_weight_predictor = nn.Linear(self.model.config.hidden_size, 1)
@@ -79,7 +90,10 @@ class Classifier(nn.Module):
             attention_mask=inputs["attention_mask"],
         )
 
-        if "learned_weight" in args.method or "learned_weight_no_bias" in args.method:
+        if "boostup" in args.method:
+            out["last_hidden_state"] = self.boost(out["last_hidden_state"])
+            weights = None
+        elif "learned_weight" in args.method or "learned_weight_no_bias" in args.method:
             lengths = (inputs["attention_mask"].sum(1) - 2)
             weights = []
             for j, length in enumerate(lengths):
@@ -191,9 +205,13 @@ def main():
     batch_size = args.batch_size
     learning_rate = args.learning_rate
     
+    if args.method == "boostup":
+        assert all([name not in args.train_suffix for name in ["token_mixture_preds", "uniform", "oracle"]])
+        assert all([name not in args.train_suffix for name in ["token_mixture_preds", "uniform", "oracle"]])
+    
     fr = get_dataset_distribution_name(args.train_suffix)
     run_id = f"{fr}"
-    if any([name in args.train_suffix for name in ["token_mixture_preds", "uniform", "oracle"]]):
+    if any([name in args.train_suffix for name in ["token_mixture_preds", "uniform", "oracle"]]) or "boostup" in args.method:
         run_id += f"_weight={args.token_mixture_multiplier}"
         method_str = "-".join(args.method)
         run_id += f"_method={method_str}"
