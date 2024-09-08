@@ -11,10 +11,8 @@ Evaluate:
 - Hamming Distance
 """
 
-import json
 import os
 import random
-import sys
 from copy import deepcopy
 
 import pandas as pd
@@ -23,7 +21,7 @@ from datasets import load_from_disk
 from openai import OpenAI
 from tqdm import tqdm
 
-from utils import get_levenshtein_tags
+from utils import get_levenshtein_tags, get_mixture_weights, load_mixture_predictor
 
 DIRNAME = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
 SAVE_DIRNAME = "./prompting_data"
@@ -56,6 +54,10 @@ FEWSHOT_HEADER="""Here are some examples of original passages and their rephrase
 GPT_NAME = "gpt-4o"
 TOKENIZER = tiktoken.encoding_for_model("gpt-4o")
 DO_PROMPT = True
+USE_MIXTURE_WEIGHTS = True
+
+if USE_MIXTURE_WEIGHTS:
+    mixture_predictor = load_mixture_predictor()
 
 def file_exists(
     filename: str
@@ -111,11 +113,11 @@ def create_rephrase_data(
         original_data[i]["rephrase"] = query(client, REPHRASE_PROMPT.format(record["unit"]))
         original_data[i]["rephrase_prompt"] = REPHRASE_PROMPT.format(record["unit"])
 
-        original_data[i]["rephrase_fewshot"] = [None] * len(record["fewshot_units"])
-        original_data[i]["fewshot_rephrase_prompts"] = [None] * len(record["fewshot_units"])
-        for j, unit in enumerate(record["fewshot_units"]):
-            original_data[i]["rephrase_fewshot"][j] = query(client, REPHRASE_PROMPT.format(unit))
-            original_data[i]["fewshot_rephrase_prompts"][j] = REPHRASE_PROMPT.format(unit)
+        # original_data[i]["rephrase_fewshot"] = [None] * len(record["fewshot_units"])
+        # original_data[i]["fewshot_rephrase_prompts"] = [None] * len(record["fewshot_units"])
+        # for j, unit in enumerate(record["fewshot_units"]):
+        #     original_data[i]["rephrase_fewshot"][j] = query(client, REPHRASE_PROMPT.format(unit))
+        #     original_data[i]["fewshot_rephrase_prompts"][j] = REPHRASE_PROMPT.format(unit)
         
     df = pd.DataFrame(original_data)
     return df
@@ -155,6 +157,19 @@ def get_tokens_to_keep(
     rephrase: str,
     original: str,
 ):
+    if USE_MIXTURE_WEIGHTS:
+        mixture_out = get_mixture_weights(
+            mixture_predictor, 
+            [rephrase], 
+            key=None, 
+            batch_size=1, 
+            return_sequence_probs=True, 
+            progress_bar=False
+        )
+        tokens = mixture_predictor.tokenizer.tokenize(rephrase)
+        tokens_to_keep = [tok for tok, probs in zip(tokens, mixture_out[1][0]) if probs[0] > 0.5]
+        return tokens_to_keep
+    
     def tok_fn(text):
         encodings = TOKENIZER.encode(text, allowed_special="all")
         encodings = [[x] for x in encodings]
@@ -246,22 +261,16 @@ if __name__ == "__main__":
     debug = False
     client = OpenAI()
     
-    # rephrase: str = "Parental actions like directing attention, clarifying information, expanding on their children's statements, offering feedback, and asking wh-questions contribute to the quality of storybook reading experiences (Chang and Luo 2020; Neuman 1996; Ninio and Bruner 1978). Additionally, when parents engage in print referencing behaviors, such as discussing the form and features of the print in the storybook, they enhance the quality of parent-child interactions during storybook reading (Justice and Ezell 2000)."
-    # original: str = "Parent behaviors such as directing attention, clarifying information, expanding on their children's utterances, providing feedback, and asking wh-questions are among behaviors that contribute to high-quality storybook reading experiences (Chang and Luo 2020;Neuman 1996;Ninio and Bruner 1978). Parents' use of print referencing behaviors, such as talking about the print form and characteristics in the storybook, also promote the quality of parent-child interactions during storybook reading (Justice and Ezell 2000)."
-    # tokens_to_keep = get_tokens_to_keep(rephrase, original)
-    # test_prompt = INVERSE_PROMPT_WITH_TOKENS_TO_KEEP.format(rephrase, tokens_to_keep)
-    # print(test_prompt)
-    
     print("Loading or Creating Data...")
     original_data = load_or_create_data(
-        "original_units.jsonl", 
-        load_s2orc_dataset,
+        "all_units.jsonl", 
+        None,
         debug=debug,
     )
     
     print("Prompting for Rephrases...")
     rephrase_data = load_or_create_data(
-        f"rephrases_{GPT_NAME}.jsonl", 
+        f"rephrases_{GPT_NAME}_all.jsonl", 
         create_rephrase_data, 
         debug=debug,
         original_data=original_data,
@@ -270,34 +279,36 @@ if __name__ == "__main__":
     
     # with_tokens_to_keep = [False, True]
     with_tokens_to_keep = [True]
-    # for tokens_to_keep in with_tokens_to_keep:
-    #     print("Prompting for Inverses, KEEP={}...".format(tokens_to_keep))
-    #     inverse_data = load_or_create_data(
-    #         f"inverse_prompts_{GPT_NAME}_keep={tokens_to_keep}.jsonl", 
-    #         prompt_inverse, 
-    #         debug=debug,
-    #         rephrase_data=rephrase_data,
-    #         client=client,
-    #         with_tokens_to_keep=tokens_to_keep,
-    #     )
+    for tokens_to_keep in with_tokens_to_keep:
+        print("Prompting for Inverses, KEEP={}...".format(tokens_to_keep))
+        fname = f"inverse_prompts_{GPT_NAME}_keep={tokens_to_keep}_all.jsonl"
+        if USE_MIXTURE_WEIGHTS:
+            fname = fname.replace("keep", "mixture-keep")
+        inverse_data = load_or_create_data(
+            fname, 
+            prompt_inverse, 
+            debug=debug,
+            rephrase_data=rephrase_data,
+            client=client,
+            with_tokens_to_keep=tokens_to_keep,
+        )
 
     # modes = ["random", "same_paper"]
-    modes = ["random", "same_paper"]
-    Ns = [1, 5]
-    for tokens_to_keep in with_tokens_to_keep:
-        for mode in modes:
-            for N in Ns:
-                if N == 5 and mode == "same_paper":
-                    continue
-
-                print("Prompting for Few-Shot Inverses, mode={}, N={}, KEEP={}".format(mode, N, tokens_to_keep))
-                inverse_data_fewshot = load_or_create_data(
-                    f"inverse_prompts_{GPT_NAME}_fewshot_{mode}_{N}_keep={tokens_to_keep}.jsonl", 
-                    prompt_inverse, 
-                    debug,
-                    rephrase_data=rephrase_data,
-                    client=client,
-                    fewshot_N=N,
-                    fewshot_mode=mode,
-                    with_tokens_to_keep=tokens_to_keep,
-                )
+    # Ns = [1, 5]
+    # for tokens_to_keep in with_tokens_to_keep:
+    #     for mode in modes:
+    #         for N in Ns:
+    #             print("Prompting for Few-Shot Inverses, mode={}, N={}, KEEP={}".format(mode, N, tokens_to_keep))
+    #             fname = f"inverse_prompts_{GPT_NAME}_fewshot_{mode}_{N}_keep={tokens_to_keep}.jsonl"
+    #             if USE_MIXTURE_WEIGHTS:
+    #                 fname = fname.replace("keep", "mixture-keep")
+    #             inverse_data_fewshot = load_or_create_data(
+    #                 fname,
+    #                 prompt_inverse, 
+    #                 debug,
+    #                 rephrase_data=rephrase_data,
+    #                 client=client,
+    #                 fewshot_N=N,
+    #                 fewshot_mode=mode,
+    #                 with_tokens_to_keep=tokens_to_keep,
+    #             )
