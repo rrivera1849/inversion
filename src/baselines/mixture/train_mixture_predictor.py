@@ -1,6 +1,3 @@
-"""TODO
-* Sequence prediction dependence on token prediction.
-"""
 
 import pickle
 import os
@@ -33,7 +30,7 @@ parser.add_argument("--dataset_dirname", type=str,
                     help="Directory containing the dataset files.")
 parser.add_argument("--experiment_id", type=str, default="debug",
                     help="Experiment ID, used for logging and saving checkpoints.")
-parser.add_argument("--num_epochs", type=int, default=25,
+parser.add_argument("--num_epochs", type=int, default=10,
                     help="Number of training epochs.")
 parser.add_argument("--batch_size", type=int, default=16,
                     help="Batch size to use during training.")
@@ -41,6 +38,8 @@ parser.add_argument("--learning_rate", type=float, default=2e-5,
                     help="Learning rate to use during training.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=8,
                     help="Number of gradient accumulation steps.")
+parser.add_argument("--perc", type=float, default=1.0,
+                    help="Percentage of the training dataset to use.")
 parser.add_argument("--checkpoint_path", type=str, default=None,
                     help="Path to a checkpoint to resume training from.")
 parser.add_argument("--evaluate_only", default=False, action="store_true",
@@ -59,6 +58,9 @@ METRICS = {
 class JSONLDataset(Dataset):
     def __init__(self, path):
         self.dataset = pd.read_json(path, lines=True)
+        if args.perc < 1.0:
+            self.dataset = self.dataset.sample(frac=args.perc, random_state=args.seed)
+        print("Total samples:", len(self.dataset))
 
     def __len__(self):
         return len(self.dataset)
@@ -243,7 +245,12 @@ def main():
     if args.evaluate_only and args.checkpoint_path is None:
         raise ValueError("Must provide a checkpoint path to evaluate the model.")
 
-    experiment_dir = os.path.join(f"./outputs/{args.experiment_id}")
+    if args.perc < 1.0:
+        experiment_id = f"{args.experiment_id}_perc={args.perc}"
+    else:
+        experiment_id = args.experiment_id
+
+    experiment_dir = os.path.join(f"./outputs/{experiment_id}")
     checkpoints_dir = os.path.join(experiment_dir, "checkpoints")
     os.makedirs(experiment_dir, exist_ok=True)
     os.makedirs(checkpoints_dir, exist_ok=True)
@@ -338,4 +345,5 @@ def main():
 
 if __name__ == "__main__":
     set_seed(args.seed)
+    assert args.perc > 0. and args.perc <= 1.
     sys.exit(main())

@@ -42,6 +42,8 @@ parser.add_argument("--per_device_train_batch_size", type=int, default=64,
                     help="Batch size per device.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                     help="Number of gradient accumulation steps.")
+parser.add_argument("--perc", type=float, default=1.0,
+                    help="Percentage of the training dataset to use.")
 
 # LoRA Parameters:
 parser.add_argument("--lora_r", type=float, default=32,
@@ -137,6 +139,9 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             i += 1
             if N is not None and i >= N:
                 break
+    if args.perc < 1.0:
+        random.shuffle(train_data)
+        train_data = train_data[:int(args.perc * len(train_data))]
     i = 0
     with open(os.path.join(args.dataset_path, "valid.jsonl"), "r") as fin:
         for line in fin:
@@ -147,13 +152,11 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
                 break
     
     if args.use_mixture_weights or args.use_mixture_weights_no_probs:
-        mixture_predictor = load_mixture_predictor()
+        mixture_predictor = load_mixture_predictor(args.perc)
 
         train_weights = get_mixture_weights(mixture_predictor, train_data)
         valid_weights = get_mixture_weights(mixture_predictor, valid_data)
         train_weights = mix_gold_labels(train_weights, train_data)
-        # RRS - shouldn't mix gold labels in validation data!
-        # valid_weights = mix_gold_labels(valid_weights, valid_data)
 
         train_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(train_data)]
         valid_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(valid_data)]
@@ -186,6 +189,7 @@ def get_run_name(train_samples):
         "r": args.lora_r,
         "alpha": args.lora_alpha,
         "dropout": args.lora_dropout,
+        "perc": args.perc,
     })
     if args.use_mixture_weights:
         run_name_items["use-mixture-weights"] = args.use_mixture_weights
@@ -256,4 +260,5 @@ def main():
     print(test_metrics)
 
 if __name__ == "__main__":
+    assert args.perc > 0.0 and args.perc <= 1.0
     sys.exit(main())

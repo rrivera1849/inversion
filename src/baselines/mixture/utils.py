@@ -9,12 +9,21 @@ from tqdm import tqdm
 
 from model import MixturePredictor
 
-def load_mixture_predictor():
+mixture_perc_to_chekpoint = {
+    0.2: "./outputs/roberta-large_stratified_perc=0.2/checkpoints/checkpoint_9/",
+    0.4: "./outputs/roberta-large_stratified_perc=0.4/checkpoints/checkpoint_4/",
+    0.6: "./outputs/roberta-large_stratified_perc=0.6/checkpoints/checkpoint_8/",
+    0.8: "./outputs/roberta-large_stratified_perc=0.8/checkpoints/checkpoint_8/",
+    1.0: "./outputs/roberta-large_stratified/checkpoints/checkpoint_9/",
+}
+
+def load_mixture_predictor(perc: float = 1.0):
     model = MixturePredictor()
     accelerator = Accelerator()
     model = accelerator.prepare(model)
-    print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
-    accelerator.load_state("./outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
+    path = mixture_perc_to_chekpoint[perc]
+    print(colored("Loading STRATIFIED Mixture Predictor from: {}".format(path), "yellow"))
+    accelerator.load_state(path)
     model.eval()
     if torch.cuda.is_available():
         model.to("cuda")
