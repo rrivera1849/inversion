@@ -14,9 +14,9 @@ from utils import load_mixture_predictor, get_mixture_weights
 
 bleu = evaluate.load("bleu")
 sbert = SentenceTransformer("all-mpnet-base-v2")
-luar = AutoModel.from_pretrained("rrivera1849/LUAR-MUD")
+luar = AutoModel.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
 luar.to("cuda").eval()
-luar_tok = AutoTokenizer.from_pretrained("rrivera1849/LUAR-MUD")
+luar_tok = AutoTokenizer.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
 mixture_predictor = load_mixture_predictor()
 
 def cosine_similarity(
@@ -50,8 +50,8 @@ def get_luar_embeddings(
             truncation=True,
             return_tensors="pt",
         ).to(luar.device)
-        inputs["input_ids"] = inputs["input_ids"].view(32, 1, 512)
-        inputs["attention_mask"] = inputs["attention_mask"].view(32, 1, 512)
+        inputs["input_ids"] = inputs["input_ids"].view(len(batch), 1, 512)
+        inputs["attention_mask"] = inputs["attention_mask"].view(len(batch), 1, 512)
         outputs = luar(**inputs)
         all_outputs.append(outputs)
     all_outputs = torch.cat(all_outputs, dim=0)
@@ -152,6 +152,9 @@ def main():
         metrics[name]["mtd_score"] = get_MTD_score(candidates, references)
         metrics[name]["sbert_similarity"] = calculate_embedding_similarity(candidates, references, "sbert")
         metrics[name]["luar_similarity"] = calculate_embedding_similarity(candidates, references, "luar")
+
+        print('\t', "BLEU", metrics[name]["bleu"])
+        print('\t', "Token F1", metrics[name]["token_f1"][0])
 
     df = pd.DataFrame.from_dict(metrics, orient="index")
     df.to_json("results.json", orient="index")
