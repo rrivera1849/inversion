@@ -47,13 +47,23 @@ Please write the original passage, as you believe it was written by the human, w
 Only output the rephrased-passage, do not include any other details.
 """
 
+INVERSE_PROMPT_WITH_TOKENS_PROBS="""The following passage is a LLM rephrase of a human-written passage: {}
+
+Here is a list of tokens, along with the probability that they're human.
+Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]: {}
+
+Please write the original passage, as you believe it was written by the human.
+
+Only output the rephrased-passage, do not include any other details.
+"""
+
 FEWSHOT_HEADER="""Here are some examples of original passages and their rephrases:
 
 """
 
 GPT_NAME = "gpt-4o"
 TOKENIZER = tiktoken.encoding_for_model("gpt-4o")
-DO_PROMPT = True
+DO_PROMPT = False
 USE_MIXTURE_WEIGHTS = True
 
 if USE_MIXTURE_WEIGHTS:
@@ -126,14 +136,18 @@ def build_inverse_prompt(
     rephrase: str,
     header: str = None,
     unit: str = None,
+    tokens_to_keep_prompt: str = "list",
 ) -> str:
     out = ""
     if header:
         out += header
     
     if unit:
-        tokens_to_keep = get_tokens_to_keep(rephrase, unit)
-        out += INVERSE_PROMPT_WITH_TOKENS_TO_KEEP.format(rephrase, tokens_to_keep)
+        tokens_to_keep = get_tokens_to_keep(rephrase, unit, tokens_to_keep_prompt)
+        if tokens_to_keep_prompt == "list":
+            out += INVERSE_PROMPT_WITH_TOKENS_TO_KEEP.format(rephrase, tokens_to_keep)
+        elif tokens_to_keep_prompt == "probs":
+            out += INVERSE_PROMPT_WITH_TOKENS_PROBS.format(rephrase, tokens_to_keep)
     else:
         out += INVERSE_PROMPT.format(rephrase)
 
@@ -143,11 +157,12 @@ def build_fewshot_header(
     units: list[str],
     rephrases: list[str],
     with_tokens_to_keep: bool = False,
+    tokens_to_keep_prompt: str = "list",
 ) -> str:
     header = FEWSHOT_HEADER
     for unit, rephrase in zip(units, rephrases):
         if with_tokens_to_keep:
-            tokens_to_keep = get_tokens_to_keep(rephrase, unit)
+            tokens_to_keep = get_tokens_to_keep(rephrase, unit, tokens_to_keep_prompt)
             header += f"Rephrased: {rephrase}\nTokens to keep when re-writing the passage: {tokens_to_keep}\nOriginal: {unit}\n\n"
         else:
             header += f"Rephrased: {rephrase}\nOriginal: {unit}\n\n"
@@ -156,6 +171,7 @@ def build_fewshot_header(
 def get_tokens_to_keep(
     rephrase: str,
     original: str,
+    tokens_to_keep_prompt: str = "list",
 ):
     if USE_MIXTURE_WEIGHTS:
         mixture_out = get_mixture_weights(
@@ -167,8 +183,15 @@ def get_tokens_to_keep(
             progress_bar=False
         )
         tokens = mixture_predictor.tokenizer.tokenize(rephrase)
-        tokens_to_keep = [tok for tok, probs in zip(tokens, mixture_out[1][0]) if probs[0] > 0.5]
-        return tokens_to_keep
+        if tokens_to_keep_prompt == "list":
+            tokens_to_keep = [tok for tok, probs in zip(tokens, mixture_out[1][0]) if probs[0] > 0.5]
+            return tokens_to_keep
+        else:
+            probs = mixture_out[1][0]
+            tokens_to_keep = [f"{tok}[{probs[0]:.2f}]" for tok, probs in zip(tokens, probs)]
+            tokens_to_keep = ", ".join(tokens_to_keep)
+            
+            return tokens_to_keep
     
     def tok_fn(text):
         encodings = TOKENIZER.encode(text, allowed_special="all")
@@ -178,7 +201,11 @@ def get_tokens_to_keep(
     
     tags = get_levenshtein_tags(rephrase, original, tok_fn)
     tokens = tok_fn(rephrase)
-    tokens_to_keep = [tok for tok, tag in zip(tokens, tags) if tag == "KEEP"]
+    if tokens_to_keep_prompt == "list":
+        tokens_to_keep = [tok for tok, tag in zip(tokens, tags) if tag == "KEEP"]
+    else:
+        tokens_to_keep = [f"{tok}[1.0]" for tok, tag in zip(tokens, tags)]
+        tokens_to_keep = ", ".join(tokens_to_keep)
     return tokens_to_keep
 
 def prompt_inverse(
@@ -187,7 +214,9 @@ def prompt_inverse(
     fewshot_N: int = 5,
     fewshot_mode: str = None,
     with_tokens_to_keep: bool = False,
+    tokens_to_keep_prompt: str = "list",
 ) -> pd.DataFrame:
+    assert tokens_to_keep_prompt in ["list", "probs"]
     assert fewshot_mode in [None, "same_paper", "random"]
     rephrase_data = deepcopy(rephrase_data)
 
@@ -202,7 +231,7 @@ def prompt_inverse(
         rephrased_units = [item for sublist in rephrased_units for item in sublist]
         rephrased_units = random.sample(rephrased_units, k=fewshot_N)
         
-        fewshot_header = build_fewshot_header(original_units, rephrased_units, with_tokens_to_keep)
+        fewshot_header = build_fewshot_header(original_units, rephrased_units, with_tokens_to_keep, tokens_to_keep_prompt)
 
     for i, record in enumerate(tqdm(rephrase_data)):
         unit = record["unit"] if with_tokens_to_keep else None
@@ -211,6 +240,7 @@ def prompt_inverse(
                 record["rephrase"], 
                 unit=unit,
                 header=fewshot_header,
+                tokens_to_keep_prompt=tokens_to_keep_prompt,
             )
             inverse = query(client, prompt)
         elif fewshot_mode == "same_paper":
@@ -223,13 +253,15 @@ def prompt_inverse(
             prompt = build_inverse_prompt(
                 record["rephrase"], 
                 unit=unit,
-                header=fewshot_header, 
+                header=fewshot_header,
+                tokens_to_keep_prompt=tokens_to_keep_prompt,
             )
             inverse = query(client, prompt)
         else:
             prompt = build_inverse_prompt(
                 record["rephrase"], 
                 unit=unit,
+                tokens_to_keep_prompt=tokens_to_keep_prompt,
             ) 
             inverse = query(client, prompt)
         
@@ -276,39 +308,43 @@ if __name__ == "__main__":
         original_data=original_data,
         client=client,
     )
-    
-    # with_tokens_to_keep = [False, True]
-    with_tokens_to_keep = [True]
-    for tokens_to_keep in with_tokens_to_keep:
-        print("Prompting for Inverses, KEEP={}...".format(tokens_to_keep))
-        fname = f"inverse_prompts_{GPT_NAME}_keep={tokens_to_keep}_all.jsonl"
-        if USE_MIXTURE_WEIGHTS:
-            fname = fname.replace("keep", "mixture-keep")
-        inverse_data = load_or_create_data(
-            fname, 
-            prompt_inverse, 
-            debug=debug,
-            rephrase_data=rephrase_data,
-            client=client,
-            with_tokens_to_keep=tokens_to_keep,
-        )
+        
+    print("Prompting for Inverses, KEEP=False...")
+    fname = f"inverse_prompts_{GPT_NAME}_keep=False_all.jsonl"
+    if USE_MIXTURE_WEIGHTS:
+        fname = fname.replace("keep", "mixture-keep")
+    inverse_data = load_or_create_data(
+        fname, 
+        prompt_inverse, 
+        debug=debug,
+        rephrase_data=rephrase_data,
+        client=client,
+        with_tokens_to_keep=False,
+    )
 
-    # modes = ["random", "same_paper"]
-    # Ns = [1, 5]
-    # for tokens_to_keep in with_tokens_to_keep:
-    #     for mode in modes:
-    #         for N in Ns:
-    #             print("Prompting for Few-Shot Inverses, mode={}, N={}, KEEP={}".format(mode, N, tokens_to_keep))
-    #             fname = f"inverse_prompts_{GPT_NAME}_fewshot_{mode}_{N}_keep={tokens_to_keep}.jsonl"
-    #             if USE_MIXTURE_WEIGHTS:
-    #                 fname = fname.replace("keep", "mixture-keep")
-    #             inverse_data_fewshot = load_or_create_data(
-    #                 fname,
-    #                 prompt_inverse, 
-    #                 debug,
-    #                 rephrase_data=rephrase_data,
-    #                 client=client,
-    #                 fewshot_N=N,
-    #                 fewshot_mode=mode,
-    #                 with_tokens_to_keep=tokens_to_keep,
-    #             )
+    print("Prompting for Inverses, KEEP=True...")
+    fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    if USE_MIXTURE_WEIGHTS:
+        fname = fname.replace("keep", "mixture-keep")
+    inverse_data = load_or_create_data(
+        fname, 
+        prompt_inverse, 
+        debug=debug,
+        rephrase_data=rephrase_data,
+        client=client,
+        with_tokens_to_keep=True,
+    )
+
+    print("Prompting for Inverses, KEEP=True...")
+    fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    if USE_MIXTURE_WEIGHTS:
+        fname = fname.replace("keep", "mixture-keep-probs")
+    inverse_data = load_or_create_data(
+        fname, 
+        prompt_inverse, 
+        debug=debug,
+        rephrase_data=rephrase_data,
+        client=client,
+        with_tokens_to_keep=True,
+        tokens_to_keep_prompt="probs",
+    )
