@@ -5,6 +5,8 @@ import sys
 import evaluate
 import nltk
 import pandas as pd
+import torch
+from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics import roc_auc_score
 
@@ -12,7 +14,18 @@ from utils import load_mixture_predictor, get_mixture_weights
 
 bleu = evaluate.load("bleu")
 sbert = SentenceTransformer("all-mpnet-base-v2")
+luar = AutoModel.from_pretrained("rrivera1849/LUAR-MUD")
+luar.to("cuda").eval()
+luar_tok = AutoTokenizer.from_pretrained("rrivera1849/LUAR-MUD")
 mixture_predictor = load_mixture_predictor()
+
+def cosine_similarity(
+    embeddings_1: torch.Tensor,
+    embeddings_2: torch.Tensor,
+):
+    cosine_scores = util.pytorch_cos_sim(embeddings_1, embeddings_2).diag().cpu().tolist()
+    avg_cosine_similarity = sum(cosine_scores) / len(cosine_scores)
+    return avg_cosine_similarity, cosine_scores
 
 def calculate_sbert_similarity(
     candidates: list[str], 
@@ -20,9 +33,49 @@ def calculate_sbert_similarity(
 ):
     embeddings1 = sbert.encode(candidates, convert_to_tensor=True)
     embeddings2 = sbert.encode(references, convert_to_tensor=True)
-    cosine_scores = util.pytorch_cos_sim(embeddings1, embeddings2).diag().cpu().tolist()
-    avg_sbert_similarity = sum(cosine_scores) / len(cosine_scores)
-    return avg_sbert_similarity, cosine_scores
+    return cosine_similarity(embeddings1, embeddings2)
+
+@torch.no_grad()
+def get_luar_embeddings(
+    text: str,
+    batch_size: int = 32,
+):
+    all_outputs = []
+    for i in range(0, len(text), batch_size):
+        batch = text[i:i+batch_size]
+        inputs = luar_tok(
+            batch,
+            padding="max_length",
+            max_length=512,
+            truncation=True,
+            return_tensors="pt",
+        ).to(luar.device)
+        inputs["input_ids"] = inputs["input_ids"].view(32, 1, 512)
+        inputs["attention_mask"] = inputs["attention_mask"].view(32, 1, 512)
+        outputs = luar(**inputs)
+        all_outputs.append(outputs)
+    all_outputs = torch.cat(all_outputs, dim=0)
+    return all_outputs
+
+def calculate_luar_similarity(
+    candidates: list[str],
+    references: list[str],
+):
+    embeddings1 = get_luar_embeddings(candidates)
+    embeddings2 = get_luar_embeddings(references)
+    return cosine_similarity(embeddings1, embeddings2)
+
+def calculate_embedding_similarity(
+    candidates: list[str],
+    references: list[str],
+    model_name: str = "sbert",
+):
+    if model_name == "sbert":
+        return calculate_sbert_similarity(candidates, references)
+    elif model_name == "luar":
+        return calculate_luar_similarity(candidates, references)
+    else:
+        raise ValueError(f"Model name {model_name} not supported.")
 
 def token_f1(
     candidates: list[str], 
@@ -97,10 +150,10 @@ def main():
         metrics[name]["bleu"] = bleu.compute(predictions=candidates, references=references)["bleu"]
         metrics[name]["token_f1"] = token_f1(candidates, references)
         metrics[name]["mtd_score"] = get_MTD_score(candidates, references)
-        metrics[name]["sbert_similarity"] = calculate_sbert_similarity(candidates, references)
+        metrics[name]["sbert_similarity"] = calculate_embedding_similarity(candidates, references, "sbert")
+        metrics[name]["luar_similarity"] = calculate_embedding_similarity(candidates, references, "luar")
 
     df = pd.DataFrame.from_dict(metrics, orient="index")
-    print(df.to_markdown())
     df.to_json("results.json", orient="index")
 
 if __name__ == "__main__":
