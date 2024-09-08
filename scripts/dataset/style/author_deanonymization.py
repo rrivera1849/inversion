@@ -2,24 +2,33 @@
 import os
 import random
 import sys
+sys.path.append("../../../src/baselines/mixture/")
 from copy import deepcopy
 
 import pandas as pd
 from transformers import AutoTokenizer
 from tqdm import tqdm
-tqdm.pandas()
 
+from check import read_all_mixture_data, read_all_inverse_data
+
+tqdm.pandas()
 random.seed(43)
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-base")
 
 SUFFIX = ".politics"
 
+MIXTURE_TRAIN_PATH = "../../../src/baselines/mixture/datasets/all_roberta-large_250000_stratified/"
+INVERSE_TRAIN_PATH = "../../../src/baselines/mixture/datasets/all_roberta-large_250000_stratified_inverse/"
+df_mixture = read_all_mixture_data(MIXTURE_TRAIN_PATH)
+df_inverse = read_all_inverse_data(INVERSE_TRAIN_PATH)
+all_data = df_mixture.union(df_inverse)
+
 def filter_by_lengths(row):
     N = len(row["syms"])
     indices_to_keep = []
     for i in range(N):
-        if row["num_tokens"][i] >= 128-32 and row["num_tokens"][i] <= 128+32:
+        if row["num_tokens"][i] >= 128-32 and row["num_tokens"][i] <= 128+32 and row["syms"][i] not in all_data:
             indices_to_keep.append(i)
     for k, v in row.items():
         if isinstance(v, list):
