@@ -7,11 +7,13 @@ from argparse import ArgumentParser
 import spacy
 import torch
 from sklearn.metrics import accuracy_score
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, set_seed
 from termcolor import colored
 from tqdm import tqdm
 
 from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor, get_levenshtein_tags
+
+set_seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--model_name", type=str, default="mixture_simple")
@@ -73,7 +75,7 @@ def load_prompting_data(
 ):
     """Loads the Prompting Data.
     """
-    fname = "./prompting_data/rephrases_gpt-4o.jsonl"
+    fname = "./prompting_data/rephrases_gpt-4o_all.jsonl"
     data = [json.loads(line) for line in open(fname)]
     return data
 
@@ -113,11 +115,11 @@ def main():
     )
     
     data = load_prompting_data()
-    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.model_name}")
+    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.model_name}_all")
     args_to_save = generation_args.copy()
     if args.oracle:
         args_to_save["oracle"] = True
-        args_to_save["oracle_tok"] = args.oracle_tok
+        args_to_save["oracle_tok"] = os.path.basename(args.oracle_tok)
     for name, value in args_to_save.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl"
@@ -155,7 +157,7 @@ def main():
             return_tensors="pt",
             padding="max_length",
             truncation=True,
-            max_length=2048,
+            max_length=2048+1024,
         ).to("cuda")
         outputs = inverse_model.generate(
             **tokenized_text,
@@ -163,7 +165,14 @@ def main():
         )
 
         outputs = inverse_tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        outputs = [t[t.index("Output: ")+len("Output: "):] for t in outputs]
+        outputs_ = []
+        for t in outputs:
+            try:
+                outputs_.append(t[t.index("Output: ")+len("Output: "):])
+            except:
+                print("Skipped!")
+                continue
+        outputs = outputs_
         outputs = [get_best_sentence_substring(o, t) for o, t in zip(outputs, text)]
 
         for j in range(len(outputs)):
@@ -172,10 +181,10 @@ def main():
             elem["inverse_prompt"] = prompt_text[j]
             output_fout.write(json.dumps(elem) + "\n")
             
-            print("Original:", colored(elem["unit"], "blue"))
-            print()
-            print("Inverse:", colored(outputs[j], "red"))
-            print("=====================================")
+            # print("Original:", colored(elem["unit"], "blue"))
+            # print()
+            # print("Inverse:", colored(outputs[j], "red"))
+            # print("=====================================")
 
         if DEBUG:
             break

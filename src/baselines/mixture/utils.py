@@ -1,5 +1,6 @@
 
 import Levenshtein
+import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
 from termcolor import colored
@@ -15,6 +16,8 @@ def load_mixture_predictor():
     print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
     accelerator.load_state("./outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
     model.eval()
+    if torch.cuda.is_available():
+        model.to("cuda")
     return model
 
 def get_mixture_weights(
