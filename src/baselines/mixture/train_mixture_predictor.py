@@ -1,6 +1,7 @@
 
 import pickle
 import os
+import random
 import sys
 from argparse import ArgumentParser
 from glob import glob
@@ -20,6 +21,7 @@ from sklearn.metrics import (
 )
 from termcolor import colored
 from torch.utils.data import Dataset, DataLoader
+from transformers import AutoTokenizer
 from tqdm import tqdm
 
 from model import MixturePredictor
@@ -62,11 +64,26 @@ class JSONLDataset(Dataset):
             self.dataset = self.dataset.sample(frac=args.perc, random_state=args.seed)
         print("Total samples:", len(self.dataset))
 
+        # In case we're reading from the inverse dataset:
+        self.tokenizer = AutoTokenizer.from_pretrained("roberta-large")
+
     def __len__(self):
         return len(self.dataset)
     
     def __getitem__(self, idx):
-        return self.dataset.iloc[idx].to_dict()
+        sample =  self.dataset.iloc[idx].to_dict()
+
+        # In case we're reading from the inverse dataset:
+        if "original" in sample:
+            if random.random() < 0.5:
+                text = sample["original"]
+                sample["tagger_labels"] = [0] * len(self.tokenizer.tokenize(text))
+                sample["label"] = 0
+            else:
+                text = sample["generation"]
+            sample.update(self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=512, truncation=True))
+
+        return sample
     
 def get_dataloader(path, shuffle=True, max_samples=None):
     dataset = JSONLDataset(path)
@@ -135,6 +152,11 @@ def train_step(
     for i, batch in enumerate(data_loader):
         with accelerator.accumulate(model):
             optimizer.zero_grad()
+
+            if batch["input_ids"].size(1) == 1 and batch["attention_mask"].size(1) == 1:
+                batch["input_ids"] = batch["input_ids"].squeeze(1)
+                batch["attention_mask"] = batch["attention_mask"].squeeze(1)
+
             output = model(batch)
             loss = output["loss"]
             accelerator.backward(loss)
@@ -189,7 +211,12 @@ def validation_step(
     metric_accumulators = {metric_name: [] for metric_name in METRICS.keys()}
     
     for i, batch in enumerate(validation_dataloader):
+        if batch["input_ids"].size(1) == 1 and batch["attention_mask"].size(1) == 1:
+            batch["input_ids"] = batch["input_ids"].squeeze(1)
+            batch["attention_mask"] = batch["attention_mask"].squeeze(1)
+            
         output = model(batch)
+
         average_loss += output["loss"].item()
         average_sequence_loss += output["sequence_loss"].item()
         average_token_mixture_loss += output["token_mixture_loss"].item()
