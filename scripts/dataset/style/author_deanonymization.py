@@ -61,8 +61,10 @@ def main():
     df.syms = df.syms.apply(lambda x: random.sample(x, k=2))
     queries = deepcopy(df)
     queries.syms = queries.syms.apply(lambda x: x[0])
+    queries.rename(columns={"author_id": "id", "syms": "unit"}, inplace=True)
     targets = deepcopy(df)
     targets.syms = targets.syms.apply(lambda x: x[1])
+    targets.rename(columns={"author_id": "id", "syms": "unit"}, inplace=True)
 
     save_dirname = "/home/riverasoto1/repos/changepoint/src/baselines/mixture/prompting_data/author"
     os.makedirs(save_dirname, exist_ok=True)
