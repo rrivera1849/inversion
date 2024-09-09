@@ -1,9 +1,3 @@
-"""Use PEFT to train fine-tune an LLM to invert the rephrases.
-
-1. Rephrase -> Original
-2. Prompt(MixtureWeights) + Rephrase -> Original
-    - MixtureWeights sampled from the gold labels, or mixture predictor with probability x%.
-"""
 
 import json
 import os
@@ -14,6 +8,7 @@ from collections import OrderedDict
 from typing import Dict, Union
 
 import torch
+import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from termcolor import colored
 from transformers import (
@@ -38,6 +33,8 @@ parser.add_argument("--lr", type=float, default=2e-5,
                     help="Learning rate.")
 parser.add_argument("--max_steps", type=int, default=1000,
                     help="Number of training steps.")
+parser.add_argument("--save_steps", type=int, default=200,
+                    help="Number of steps to save the model.")
 parser.add_argument("--per_device_train_batch_size", type=int, default=64,
                     help="Batch size per device.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
@@ -53,19 +50,19 @@ parser.add_argument("--lora_alpha", type=float, default=64,
 parser.add_argument("--lora_dropout", type=float, default=0.1,
                     help="Dropout parameter for LoRA adapter layers.")
 
-parser.add_argument("--use_mixture_weights", default=False, action="store_true",
-                    help="Use mixture weights to condition the generation.")         
-parser.add_argument("--use_mixture_weights_no_probs", default=False, action="store_true",
-                    help="If True, will set up a simple prompt with the human tokens to keep, but nothing else.")
+parser.add_argument("--prompt_type", type=str, default="none",
+                    choices=["none", "tokens", "probs", "logprobs"],
+                    help="Type of prompt to use for conditioning the generation.")
+
 parser.add_argument("--perc_gold_labels", type=float, default=0.5, 
                     help="Percentage of gold labels to use for conditioning the generation.")
  
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
-if args.use_mixture_weights:
+if args.prompt_type in ["probs", "logprobs"]:
     MAX_LENGTH = 2048
-elif args.use_mixture_weights_no_probs:
+elif args.prompt_type == "tokens":
     MAX_LENGTH = 1024
 else:
     MAX_LENGTH = (128 + 32) * 2
@@ -74,10 +71,10 @@ MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,
     model_max_lenght=MAX_LENGTH,
-    padding_side="left", # left padding solves the following problem: the quick brown <PAD> --> prediction uses PAD token 
+    padding_side="left",
     add_eos_token=True,
 )
-tokenizer.pad_token = tokenizer.eos_token
+tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
 def load_model():
     quantization_config = BitsAndBytesConfig(
@@ -137,6 +134,8 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             data = json.loads(line)
             train_data.append(data)
             i += 1
+            if i % 10_000 == 0:
+                print(colored(f"Loaded {i} training samples", "yellow"))
             if N is not None and i >= N:
                 break
     if args.perc < 1.0:
@@ -148,27 +147,22 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             data = json.loads(line)
             valid_data.append(data)
             i += 1
+            if i % 10_000 == 0:
+                print(colored(f"Loaded {i} validation samples", "yellow"))
             if N is not None and i >= N:
                 break
-    
-    if args.use_mixture_weights or args.use_mixture_weights_no_probs:
-        mixture_predictor = load_mixture_predictor(args.perc)
 
-        train_weights = get_mixture_weights(mixture_predictor, train_data)
-        valid_weights = get_mixture_weights(mixture_predictor, valid_data)
-        train_weights = mix_gold_labels(train_weights, train_data)
-
-        train_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(train_data)]
-        valid_data_tokens = [mixture_predictor.tokenizer.tokenize(data["generation"]) for data in tqdm(valid_data)]
-
-        train_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights, simple_prompt=args.use_mixture_weights_no_probs) for data, tokens, weights in zip(train_data, train_data_tokens, train_weights)]
-        valid_text = [build_inverse_prompt(data["generation"], data["original"], tokens, weights, simple_prompt=args.use_mixture_weights_no_probs) for data, tokens, weights in zip(valid_data, valid_data_tokens, valid_weights)]
+    if args.prompt_type != "none":
+        train_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_probs"], data["mixture_weights"], prompt_type=args.prompt_type) for data in train_data]
+        valid_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_probs"], data["mixture_weights"], prompt_type=args.prompt_type) for data in valid_data]
     else:
         train_text = [build_inverse_prompt(data["generation"], data["original"]) for data in train_data]
         valid_text = [build_inverse_prompt(data["generation"], data["original"]) for data in valid_data]
 
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
+
+    import pdb; pdb.set_trace()
     return train_samples, valid_samples
 
 def mix_gold_labels(
@@ -190,12 +184,9 @@ def get_run_name(train_samples):
         "alpha": args.lora_alpha,
         "dropout": args.lora_dropout,
         "perc": args.perc,
+        "prompt": args.prompt_type,
     })
-    if args.use_mixture_weights:
-        run_name_items["use-mixture-weights"] = args.use_mixture_weights
-        run_name_items["perc-gold-labels"] = args.perc_gold_labels
-    if args.use_mixture_weights_no_probs:
-        run_name_items["simple-prompt"] = args.use_mixture_weights_no_probs
+    if args.prompt_type not in ["probs", "logprobs", "tokens"]:
         run_name_items["perc-gold-labels"] = args.perc_gold_labels
     run_name_items["debug"] = args.debug
     run_name = "Mistral-7B-v0.3-QLoRA"
@@ -211,7 +202,6 @@ def main():
         print(colored(f"\t{key} = {value}", "yellow"))
     
     train_samples, test_samples = load_dataset()
-    
     print(colored(f"len(train_samples)={len(train_samples)}", "yellow"))
     print(colored(f"len(test_samples)={len(test_samples)}", "yellow"))
     
@@ -224,7 +214,7 @@ def main():
     peft_model = load_model()
 
     max_steps = 20 if args.debug else args.max_steps
-    save_steps = 10 if args.debug else 200
+    save_steps = 10 if args.debug else args.save_steps
     logging_steps = 1 if args.debug else 100
     training_args = TrainingArguments(
         report_to="tensorboard",

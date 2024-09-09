@@ -1,4 +1,7 @@
 
+import math
+from typing import Union
+
 import Levenshtein
 import torch
 import torch.nn.functional as F
@@ -18,6 +21,8 @@ mixture_perc_to_chekpoint = {
 }
 
 def load_mixture_predictor(perc: float = 1.0):
+    print("MAKE SURE YOU LOAD THE RIGHT MIXTURE PREDICTOR DUMMY")
+    import sys; sys.exit()
     model = MixturePredictor()
     accelerator = Accelerator()
     model = accelerator.prepare(model)
@@ -31,9 +36,9 @@ def load_mixture_predictor(perc: float = 1.0):
 
 def get_mixture_weights(
     model: MixturePredictor,
-    data: list,
-    key: str = "generation",
-    batch_size: int = 32,
+    data: Union[list[str], list[dict]],
+    key: Union[str, None] = "generation",
+    batch_size: int = 512,
     return_sequence_probs: bool = False,
     progress_bar: bool = True,
 ):
@@ -41,14 +46,13 @@ def get_mixture_weights(
         text = [d[key] for d in data]
     else:
         text = data
+        
     all_seq_preds = []
     all_token_preds = []
 
+    iterator = range(0, len(data), batch_size)
     if progress_bar:
-        iterator = tqdm(range(0, len(data), batch_size))
-    else:
-        iterator = range(0, len(data), batch_size)
-        
+        iterator = tqdm(iterator)
     for i in iterator:
         batch = text[i:i+batch_size]
         sequence_preds, token_preds = model.predict(batch)
@@ -57,7 +61,6 @@ def get_mixture_weights(
 
     all_token_preds = [F.softmax(pred, dim=-1) for pred in all_token_preds]
     all_token_preds = [pred.cpu().tolist() for pred in all_token_preds]
-
     if return_sequence_probs:
         all_seq_preds = [F.softmax(pred, dim=-1) for pred in all_seq_preds]
         all_seq_preds = [pred.cpu().tolist() for pred in all_seq_preds]
@@ -70,10 +73,9 @@ def build_inverse_prompt(
     original: str,
     tokens: list[list[str]] = None,
     mixture_probs: list[list[tuple[int, int]]] = None,
-    simple_prompt: bool = False,
+    prompt_type: str = "none",
 ) -> str:
-    instruction = "Rephrase:"
-    if simple_prompt and tokens is not None and mixture_probs is not None:
+    if prompt_type == "tokens":
         tokens_to_keep = "Keep these tokens while rephrasing, Ġ is a single space: "
         added_tokens = False
         for token, probs in zip(tokens, mixture_probs):
@@ -84,16 +86,24 @@ def build_inverse_prompt(
         if not added_tokens:
             instruction = "Rephrase:"
         else:
-            instruction = f"""{tokens_to_keep[:-2]}\n\nRephrase:"""
-    elif tokens is not None and mixture_probs is not None:
+            instruction = f"""{tokens_to_keep[:-2]}\nRephrase:"""
+    elif prompt_type in ["probs" or "logprobs"]:
+        log_fn = math.log if prompt_type == "logprobs" else lambda x: x
+
         token_and_probs = ""
         for token, probs in zip(tokens, mixture_probs):
-            token_and_probs += f"{token}[{probs[0]:.2f}], "
+            token_and_probs += f"{token}[{log_fn(probs[0]):.2f}], "
         token_and_probs = token_and_probs[:-2]
-        instruction = f"""Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]
-        {token_and_probs}
-        Rephrase: """
-    prompt = f"[INST] {instruction} {generation}  [/INST] \\n Output: {original}"
+
+        if prompt_type == "probs":
+            header = "Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]"
+        else:
+            header = "Input Format: Token_1[log_prob_human], Token_2[log_prob_human], ... Token_N[log_prob_human]"
+        instruction = f"""{header}\n{token_and_probs}\nRephrase:"""
+    else:
+        instruction = "Rephrase:"
+            
+    prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}"
     return prompt
 
 def get_levenshtein_tags(
