@@ -62,8 +62,7 @@ class MixturePredictor(nn.Module):
             
         inputs = self.tokenizer(
             text,
-            max_length = 512,
-            padding = "max_length",
+            padding = True,
             truncation = True,
             return_tensors = "pt",
         )

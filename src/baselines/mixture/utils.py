@@ -12,28 +12,18 @@ from tqdm import tqdm
 
 from model import MixturePredictor
 
-mixture_perc_to_chekpoint = {
-    0.2: "./outputs/roberta-large_stratified_perc=0.2/checkpoints/checkpoint_9/",
-    0.4: "./outputs/roberta-large_stratified_perc=0.4/checkpoints/checkpoint_4/",
-    0.6: "./outputs/roberta-large_stratified_perc=0.6/checkpoints/checkpoint_8/",
-    0.8: "./outputs/roberta-large_stratified_perc=0.8/checkpoints/checkpoint_8/",
-    1.0: "./outputs/roberta-large_stratified/checkpoints/checkpoint_9/",
-}
-
-def load_mixture_predictor(perc: float = 1.0):
-    print("MAKE SURE YOU LOAD THE RIGHT MIXTURE PREDICTOR DUMMY")
-    import sys; sys.exit()
+def load_mixture_predictor(path: str):
     model = MixturePredictor()
     accelerator = Accelerator()
     model = accelerator.prepare(model)
-    path = mixture_perc_to_chekpoint[perc]
-    print(colored("Loading STRATIFIED Mixture Predictor from: {}".format(path), "yellow"))
+    print(colored("Loading Mixture Predictor from: {}".format(path), "yellow"))
     accelerator.load_state(path)
     model.eval()
     if torch.cuda.is_available():
         model.to("cuda")
     return model
 
+@torch.no_grad()
 def get_mixture_weights(
     model: MixturePredictor,
     data: Union[list[str], list[dict]],
@@ -87,7 +77,7 @@ def build_inverse_prompt(
             instruction = "Rephrase:"
         else:
             instruction = f"""{tokens_to_keep[:-2]}\nRephrase:"""
-    elif prompt_type in ["probs" or "logprobs"]:
+    elif prompt_type in ["probs", "logprobs"]:
         log_fn = math.log if prompt_type == "logprobs" else lambda x: x
 
         token_and_probs = ""
@@ -102,8 +92,9 @@ def build_inverse_prompt(
         instruction = f"""{header}\n{token_and_probs}\nRephrase:"""
     else:
         instruction = "Rephrase:"
-            
-    prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}"
+
+    stop_tokens = "\n#####\n"
+    prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}{stop_tokens}"
     return prompt
 
 def get_levenshtein_tags(

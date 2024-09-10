@@ -8,7 +8,6 @@ from collections import OrderedDict
 from typing import Dict, Union
 
 import torch
-import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from termcolor import colored
 from transformers import (
@@ -21,13 +20,13 @@ from transformers import (
 )
 from tqdm import tqdm
 
-from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor
+from utils import build_inverse_prompt
 
 random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str,
-                    default="./datasets/all_roberta-large_250000_stratified_inverse",
+                    default="./datasets/s2orc_roberta-large_200000_inverse",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--lr", type=float, default=2e-5,
                     help="Learning rate.")
@@ -61,11 +60,11 @@ parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
 if args.prompt_type in ["probs", "logprobs"]:
-    MAX_LENGTH = 2048
+    MAX_LENGTH = 2048 # 2048 / 320 = 6.4, batch_size = 128 / 6.4 = 20 
 elif args.prompt_type == "tokens":
-    MAX_LENGTH = 1024
+    MAX_LENGTH = 1024 # 1024 / 320 = 3.2, batch_size = 128 / 3.2 = 40
 else:
-    MAX_LENGTH = (128 + 32) * 2
+    MAX_LENGTH = (128 + 32) * 2 # 320
 
 MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(
@@ -74,7 +73,7 @@ tokenizer = AutoTokenizer.from_pretrained(
     padding_side="left",
     add_eos_token=True,
 )
-tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+tokenizer.pad_token = tokenizer.eos_token
 
 def load_model():
     quantization_config = BitsAndBytesConfig(
@@ -124,12 +123,13 @@ def tokenize_and_pad_to_fixed_length(
     return result
 
 def load_dataset() -> Union[list[Dict[str, list[int]]]]:
-
     N = 100 if args.debug else None
     train_data = []
     valid_data = []
     i = 0
-    with open(os.path.join(args.dataset_path, "train.jsonl"), "r") as fin:
+    fname = "train.jsonl"
+    fname += ".mixture" if args.prompt_type != "none" else ""
+    with open(os.path.join(args.dataset_path, fname), "r") as fin:
         for line in fin:
             data = json.loads(line)
             train_data.append(data)
@@ -142,7 +142,9 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
         random.shuffle(train_data)
         train_data = train_data[:int(args.perc * len(train_data))]
     i = 0
-    with open(os.path.join(args.dataset_path, "valid.jsonl"), "r") as fin:
+    fname = "valid.jsonl"
+    fname += ".mixture" if args.prompt_type != "none" else ""
+    with open(os.path.join(args.dataset_path, fname), "r") as fin:
         for line in fin:
             data = json.loads(line)
             valid_data.append(data)
@@ -153,15 +155,14 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
                 break
 
     if args.prompt_type != "none":
-        train_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_probs"], data["mixture_weights"], prompt_type=args.prompt_type) for data in train_data]
-        valid_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_probs"], data["mixture_weights"], prompt_type=args.prompt_type) for data in valid_data]
+        train_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in train_data]
+        valid_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in valid_data]
     else:
         train_text = [build_inverse_prompt(data["generation"], data["original"]) for data in train_data]
         valid_text = [build_inverse_prompt(data["generation"], data["original"]) for data in valid_data]
 
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
-
     import pdb; pdb.set_trace()
     return train_samples, valid_samples
 
