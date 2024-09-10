@@ -93,7 +93,6 @@ def load_model():
         quantization_config=quantization_config,
     )
 
-    model.gradient_checkpointing_enable()
     model = prepare_model_for_kbit_training(model)
 
     peft_config = LoraConfig(
@@ -163,7 +162,6 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
 
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
-    import pdb; pdb.set_trace()
     return train_samples, valid_samples
 
 def mix_gold_labels(
@@ -187,7 +185,7 @@ def get_run_name(train_samples):
         "perc": args.perc,
         "prompt": args.prompt_type,
     })
-    if args.prompt_type not in ["probs", "logprobs", "tokens"]:
+    if args.prompt_type in ["probs", "logprobs", "tokens"]:
         run_name_items["perc-gold-labels"] = args.perc_gold_labels
     run_name_items["debug"] = args.debug
     run_name = "Mistral-7B-v0.3-QLoRA"
