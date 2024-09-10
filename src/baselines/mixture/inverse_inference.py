@@ -1,3 +1,7 @@
+"""
+We want:
+- Perplexity
+"""
 
 import json
 import os
@@ -6,54 +10,42 @@ from argparse import ArgumentParser
 
 import spacy
 import torch
-from sklearn.metrics import accuracy_score
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, set_seed
 from termcolor import colored
 from tqdm import tqdm
 
-from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor, get_levenshtein_tags
+from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor
 
 set_seed(43)
 
 parser = ArgumentParser()
-parser.add_argument("--model_name", type=str, default="mixture_simple")
-parser.add_argument("--oracle", default=False, action="store_true")
-parser.add_argument("--oracle_tok", type=str, default="roberta-large")
+parser.add_argument("--prompt_type", type=str, default="none",
+                    choices=["none", "probs", "logprobs", "tokens"])
+parser.add_argument("--temperature", type=float, default=0.7)
+parser.add_argument("--top_p", type=float, default=0.9)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
 DEBUG = args.debug
 NLP = spacy.load("en_core_web_sm")
 BATCH_SIZE = 8
-USE_MIXTURE_WEIGHTS = args.model_name != "no_mixture"
-PROMPTING_DATA_PATH = "./prompting_data/inverse_trained"
+USE_MIXTURE_PROBS = args.prompt_type != "none"
+MIXTURE_PATH = "./outputs/s2orc_roberta-large_200000_perc=0.5/checkpoints/checkpoint_6/"
+PROMPTING_DATA_PATH = "./test_data/generations"
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
 INVERSE_MODELS = {
-    "no_mixture": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max_steps=1000_num_samples=25900_r=32_alpha=64_dropout=0.1_debug=False",
-    "mixture": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=1000_num-samples=25900_r=32_alpha=64_dropout=0.1_use-mixture-weights=True_perc-gold-labels=0.5_debug=False",
-    "mixture_simple": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=1000_num-samples=25900_r=32_alpha=64_dropout=0.1_simple-prompt=True_perc-gold-labels=0.5_debug=False",
+    "none": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=none_perc-gold-labels=0.5_debug=False",
 }
 
-def get_oracle_tokens_and_probs(
-    rephrase: str,
-    original: str,
-):
-    tokenizer = AutoTokenizer.from_pretrained(args.oracle_tok)
-    tags = get_levenshtein_tags(rephrase, original, tokenizer.tokenize)
-    tokens = tokenizer.tokenize(rephrase)
-    probs = [[1.0, 0.0] if tag == "KEEP" else [0.0, 1.0] for tag in tags]
-    return tokens, probs
-
 def load_inverse_model(
-    model_name: str = "no_mixture",
+    prompt_type: str = "no_mixture",
 ):
     """Loads our inversion model, either with or without Mixture Weights in the prompt.
     """
-    inverse_model = INVERSE_MODELS[model_name]
+    inverse_model = INVERSE_MODELS[prompt_type]
     print(colored("Loading: ", "green"), inverse_model)
-        
-    checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, "checkpoint-1000")
-    
+    checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, "checkpoint-600")
+
     inverse_model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,        
         torch_dtype=torch.float16,
@@ -75,7 +67,7 @@ def load_prompting_data(
 ):
     """Loads the Prompting Data.
     """
-    fname = "./prompting_data/rephrases_gpt-4o_all.jsonl"
+    fname = "./test_data/s2orc.jsonl"
     data = [json.loads(line) for line in open(fname)]
     return data
 
@@ -93,20 +85,14 @@ def get_best_sentence_substring(
     return substrings[min_idx].strip()
 
 def main():
+    mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
+    mixture_token_fn = mixture_predictor.tokenizer.tokenize
     
-    if not args.oracle:
-        mixture_predictor = load_mixture_predictor()
-        mixture_token_fn = mixture_predictor.tokenizer.tokenize
-    else:
-        mixture_token_fn = AutoTokenizer.from_pretrained(args.oracle_tok).tokenize
-    
-    inverse_model, inverse_tokenizer = load_inverse_model(
-        args.model_name,
-    )
+    inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type)
 
     generation_args = {
-        "temperature": 0.7,
-        "top_p": 0.9,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
     }
     generation_config = GenerationConfig(
         do_sample=True,
@@ -115,12 +101,9 @@ def main():
     )
     
     data = load_prompting_data()
-    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.model_name}_all")
-    args_to_save = generation_args.copy()
-    if args.oracle:
-        args_to_save["oracle"] = True
-        args_to_save["oracle_tok"] = os.path.basename(args.oracle_tok)
-    for name, value in args_to_save.items():
+
+    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.prompt_type}")
+    for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl"
     output_fout = open(output_fname, "w+")
@@ -128,64 +111,54 @@ def main():
     
     for batch_idx in tqdm(range(0, len(data), BATCH_SIZE)):
         batch = data[batch_idx:batch_idx+BATCH_SIZE]
-        text = [b["unit"] for b in batch]
+        text = [b["generation"] for b in batch]
 
-        if not args.oracle:
-            mixture_out = get_mixture_weights(
+        if USE_MIXTURE_PROBS:
+            mixture_probs = get_mixture_weights(
                 mixture_predictor,
-                batch,
+                text,
                 batch_size=BATCH_SIZE,
-                key="unit",
-                return_sequence_probs=True,
+                key=FileNotFoundError,
                 progress_bar=False
             )
-            token_probs = mixture_out[1]
-        else:
-            _, token_probs = zip(*[get_oracle_tokens_and_probs(b["rephrase"], b["unit"]) for b in batch])
+            mixture_tokens = [mixture_token_fn(t) for t in text]
             
-        if USE_MIXTURE_WEIGHTS:
-            simple_prompt = True if "simple" in args.model_name else False
             prompt_text = [
-                build_inverse_prompt(t, "", mixture_token_fn(t), w, simple_prompt=simple_prompt)
-                for t, w in zip(text, token_probs)
+                build_inverse_prompt(t, "", t, w, prompt_type=args.prompt_type, no_stop_tokens=True)
+                for t, w in zip(text, mixture_tokens, mixture_probs)
             ]
         else:
-            prompt_text = [build_inverse_prompt(t, "") for t in text]
+            prompt_text = [build_inverse_prompt(t, "", no_stop_tokens=True) for t in text]
 
         tokenized_text = inverse_tokenizer(
             prompt_text,
             return_tensors="pt",
             padding="max_length",
             truncation=True,
-            max_length=2048+1024,
+            max_length=3072,
         ).to("cuda")
-        outputs = inverse_model.generate(
+        generations = inverse_model.generate(
             **tokenized_text,
             generation_config=generation_config,
         )
-
-        outputs = inverse_tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        outputs_ = []
-        for t in outputs:
-            try:
-                outputs_.append(t[t.index("Output: ")+len("Output: "):])
-            except:
-                print("Skipped!")
-                continue
-        outputs = outputs_
-        outputs = [get_best_sentence_substring(o, t) for o, t in zip(outputs, text)]
+        generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
+        
+        outputs = []
+        for j, gen in enumerate(generations):
+            gen = gen[gen.index("Output:")+len("Output:"):]
+            if "\n#####\n" in gen:
+                gen = gen[:gen.index("\n#####\n")]
+            else:
+                gen = get_best_sentence_substring(gen, text[j])
+            outputs.append(gen)
 
         for j in range(len(outputs)):
             elem = batch[j]
             elem["inverse"] = outputs[j]
             elem["inverse_prompt"] = prompt_text[j]
             output_fout.write(json.dumps(elem) + "\n")
+            output_fout.flush()
             
-            # print("Original:", colored(elem["unit"], "blue"))
-            # print()
-            # print("Inverse:", colored(outputs[j], "red"))
-            # print("=====================================")
-
         if DEBUG:
             break
 
