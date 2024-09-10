@@ -21,6 +21,7 @@ set_seed(43)
 parser = ArgumentParser()
 parser.add_argument("--prompt_type", type=str, default="none",
                     choices=["none", "probs", "logprobs", "tokens"])
+parser.add_argument("--num", type=int, default=3800)
 parser.add_argument("--temperature", type=float, default=0.7)
 parser.add_argument("--top_p", type=float, default=0.9)
 parser.add_argument("--debug", action="store_true")
@@ -35,6 +36,8 @@ PROMPTING_DATA_PATH = "./test_data/generations"
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
 INVERSE_MODELS = {
     "none": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=none_perc-gold-labels=0.5_debug=False",
+    "tokens": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=tokens_debug=False",
+    "probs": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=probs_debug=False",
 }
 
 def load_inverse_model(
@@ -44,7 +47,7 @@ def load_inverse_model(
     """
     inverse_model = INVERSE_MODELS[prompt_type]
     print(colored("Loading: ", "green"), inverse_model)
-    checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, "checkpoint-600")
+    checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, f"checkpoint-{args.num}")
 
     inverse_model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,        
@@ -87,7 +90,8 @@ def get_best_sentence_substring(
 def main():
     mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
     mixture_token_fn = mixture_predictor.tokenizer.tokenize
-    
+
+    data = load_prompting_data()
     inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type)
 
     generation_args = {
@@ -100,9 +104,7 @@ def main():
         **generation_args,
     )
     
-    data = load_prompting_data()
-
-    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.prompt_type}")
+    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.prompt_type}_{args.num}")
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl"
@@ -117,15 +119,15 @@ def main():
             mixture_probs = get_mixture_weights(
                 mixture_predictor,
                 text,
+                key=None,
                 batch_size=BATCH_SIZE,
-                key=FileNotFoundError,
-                progress_bar=False
+                progress_bar=False,
             )
             mixture_tokens = [mixture_token_fn(t) for t in text]
             
             prompt_text = [
-                build_inverse_prompt(t, "", t, w, prompt_type=args.prompt_type, no_stop_tokens=True)
-                for t, w in zip(text, mixture_tokens, mixture_probs)
+                build_inverse_prompt(sample, "", tokens, probs, prompt_type=args.prompt_type, no_stop_tokens=True)
+                for sample, tokens, probs in zip(text, mixture_tokens, mixture_probs)
             ]
         else:
             prompt_text = [build_inverse_prompt(t, "", no_stop_tokens=True) for t in text]
@@ -158,7 +160,7 @@ def main():
             elem["inverse_prompt"] = prompt_text[j]
             output_fout.write(json.dumps(elem) + "\n")
             output_fout.flush()
-            
+             
         if DEBUG:
             break
 
