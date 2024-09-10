@@ -64,6 +64,7 @@ def build_inverse_prompt(
     tokens: list[list[str]] = None,
     mixture_probs: list[list[tuple[int, int]]] = None,
     prompt_type: str = "none",
+    no_stop_tokens: bool = False,
 ) -> str:
     if prompt_type == "tokens":
         tokens_to_keep = "Keep these tokens while rephrasing, Ġ is a single space: "
@@ -94,7 +95,10 @@ def build_inverse_prompt(
         instruction = "Rephrase:"
 
     stop_tokens = "\n#####\n"
-    prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}{stop_tokens}"
+    if no_stop_tokens:
+        prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}"
+    else:
+        prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}{stop_tokens}"
     return prompt
 
 def get_levenshtein_tags(
