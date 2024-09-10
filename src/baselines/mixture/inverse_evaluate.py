@@ -12,12 +12,13 @@ from sklearn.metrics import roc_auc_score
 
 from utils import load_mixture_predictor, get_mixture_weights
 
+MIXTURE_PATH = "./outputs/s2orc_roberta-large_200000_perc=0.5/checkpoints/checkpoint_6/"
 bleu = evaluate.load("bleu")
 sbert = SentenceTransformer("all-mpnet-base-v2")
 luar = AutoModel.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
 luar.to("cuda").eval()
 luar_tok = AutoTokenizer.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
-mixture_predictor = load_mixture_predictor()
+mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
 
 def cosine_similarity(
     embeddings_1: torch.Tensor,
@@ -129,7 +130,7 @@ def get_MTD_score(
 
 def main():
     metrics = {}
-    dataset_path = "./prompting_data/results_to_evaluate"
+    dataset_path = "./test_data/generations"
     for filename in os.listdir(dataset_path):
         path = os.path.join(dataset_path, filename)
         if not path.endswith(".jsonl"):
@@ -142,7 +143,7 @@ def main():
             candidates = df.inverse.tolist()
             references = df.unit.tolist()
         else:
-            candidates = df.rephrase.tolist()
+            candidates = df.generation.tolist()
             references = df.unit.tolist()
 
         name = os.path.splitext(os.path.basename(filename))[0]
@@ -155,9 +156,11 @@ def main():
 
         print('\t', "BLEU", metrics[name]["bleu"])
         print('\t', "Token F1", metrics[name]["token_f1"][0])
+        print('\t', "LUAR Sim.", metrics[name]["luar_similarity"][0])
+        print('\t', "SBERT Sim.", metrics[name]["sbert_similarity"][0])
 
-    df = pd.DataFrame.from_dict(metrics, orient="index")
-    df.to_json("results.json", orient="index")
+    # df = pd.DataFrame.from_dict(metrics, orient="index")
+    # df.to_json("results.json", orient="index")
 
 if __name__ == "__main__":
     sys.exit(main())
