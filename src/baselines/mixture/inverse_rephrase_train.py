@@ -7,13 +7,11 @@ from argparse import ArgumentParser
 from collections import OrderedDict
 from typing import Dict, Union
 
-import torch
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, get_peft_model
 from termcolor import colored
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
-    BitsAndBytesConfig,
     DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
@@ -34,12 +32,16 @@ parser.add_argument("--max_steps", type=int, default=1000,
                     help="Number of training steps.")
 parser.add_argument("--save_steps", type=int, default=200,
                     help="Number of steps to save the model.")
+parser.add_argument("--logging_steps", type=int, default=100,
+                    help="Number of steps to log the training metrics.")
 parser.add_argument("--per_device_train_batch_size", type=int, default=64,
                     help="Batch size per device.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                     help="Number of gradient accumulation steps.")
 parser.add_argument("--perc", type=float, default=1.0,
                     help="Percentage of the training dataset to use.")
+parser.add_argument("--loss_on_completions_only", default=False, action="store_true",
+                    help="Whether to compute the loss only on completions.")
 
 # LoRA Parameters:
 parser.add_argument("--lora_r", type=float, default=32,
@@ -60,9 +62,9 @@ parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
 if args.prompt_type in ["probs", "logprobs"]:
-    MAX_LENGTH = 2048 # 2048 / 320 = 6.4, batch_size = 128 / 6.4 = 20 
+    MAX_LENGTH = 2048
 elif args.prompt_type == "tokens":
-    MAX_LENGTH = 1024 # 1024 / 320 = 3.2, batch_size = 128 / 3.2 = 40
+    MAX_LENGTH = 1024
 else:
     MAX_LENGTH = (128 + 32) * 2 # 320
 
@@ -76,24 +78,12 @@ tokenizer = AutoTokenizer.from_pretrained(
 tokenizer.pad_token = tokenizer.eos_token
 
 def load_model():
-    quantization_config = BitsAndBytesConfig(
-        # Load the model with 4-bit quantization
-        load_in_4bit=True,
-        # Use double quantization
-        bnb_4bit_use_double_quant=True,
-        # Use 4-bit Normal Float for storing the base model weights in GPU memory
-        bnb_4bit_quant_type="nf4",
-        # De-quantize the weights to 16-bit (Brain) float before the forward/backward pass
-        bnb_4bit_compute_dtype=torch.bfloat16,
-    )
-
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, 
         device_map="auto",
-        quantization_config=quantization_config,
     )
-
-    model = prepare_model_for_kbit_training(model)
+    # https://github.com/huggingface/peft/issues/137
+    model.enable_input_require_grads()
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",
@@ -101,12 +91,11 @@ def load_model():
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         target_modules="all-linear",
-        # Bias parameters to train. 'none' is recommended to keep the original model performing equally when turning off the adapter.
-        bias="none",
+        bias="none", # keeps the original model perform equally when the adapter is not used
     )
-
     peft_model = get_peft_model(model, peft_config)
     peft_model.print_trainable_parameters()
+
     return peft_model
 
 def tokenize_and_pad_to_fixed_length(
@@ -119,8 +108,20 @@ def tokenize_and_pad_to_fixed_length(
         padding="max_length",
     )
     result["labels"] = result["input_ids"].copy()
+    if args.loss_on_completions_only:
+        output_ids = tokenizer("[/INST]\nOutput:", add_special_tokens=False)["input_ids"]
+        _, end = [(start, start+len(output_ids)) for start in range(len(result["input_ids"])) if result["input_ids"][start:start+len(output_ids)] == output_ids][0]
+        start = result["input_ids"].index(tokenizer("<s>", add_special_tokens=False)["input_ids"][0])
+        result["labels"][start:end] = [-100] * (end-start+1)
+
     return result
 
+def get_valid_key(keys: list[str], valid_names: list[str]) -> str:
+    for key in keys:
+        if key in valid_names:
+            return key
+    assert False
+    
 def load_dataset() -> Union[list[Dict[str, list[int]]]]:
     N = 100 if args.debug else None
     train_data = []
@@ -153,15 +154,18 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             if N is not None and i >= N:
                 break
 
+    genkey = get_valid_key(train_data[0].keys(), ["generation", "rephrase"])
+    origkey = get_valid_key(train_data[0].keys(), ["original", "unit"])
     if args.prompt_type != "none":
-        train_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in train_data]
-        valid_text = [build_inverse_prompt(data["generation"], data["original"], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in valid_data]
+        train_text = [build_inverse_prompt(data[genkey], data[origkey], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in train_data]
+        valid_text = [build_inverse_prompt(data[genkey], data[origkey], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in valid_data]
     else:
-        train_text = [build_inverse_prompt(data["generation"], data["original"]) for data in train_data]
-        valid_text = [build_inverse_prompt(data["generation"], data["original"]) for data in valid_data]
+        train_text = [build_inverse_prompt(data[genkey], data[origkey]) for data in train_data]
+        valid_text = [build_inverse_prompt(data[genkey], data[origkey]) for data in valid_data]
 
     train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
     valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
+
     return train_samples, valid_samples
 
 def mix_gold_labels(
@@ -176,6 +180,7 @@ def mix_gold_labels(
 
 def get_run_name(train_samples):
     run_name_items = OrderedDict({
+        "dataset_name": os.path.basename(args.dataset_path),
         "lr": args.lr,
         "max-steps": args.max_steps,
         "num-samples": len(train_samples),
@@ -214,7 +219,7 @@ def main():
 
     max_steps = 20 if args.debug else args.max_steps
     save_steps = 10 if args.debug else args.save_steps
-    logging_steps = 1 if args.debug else 100
+    logging_steps = 1 if args.debug else args.logging_steps
     training_args = TrainingArguments(
         report_to="tensorboard",
         run_name=run_name,
@@ -222,7 +227,7 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing=True,
-        optim="paged_adamw_8bit",
+        optim="adamw_hf",
         bf16=True,
         learning_rate=args.lr,
         lr_scheduler_type="constant",
