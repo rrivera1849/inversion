@@ -19,8 +19,12 @@ from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predic
 set_seed(43)
 
 parser = ArgumentParser()
+parser.add_argument("--filename", type=str, default=None)
 parser.add_argument("--prompt_type", type=str, default="none",
                     choices=["none", "probs", "logprobs", "tokens"])
+parser.add_argument("--mixture_predictor_path", type=str,
+                    default=None,
+                    help="Path to the mixture predictor model.")
 parser.add_argument("--num", type=int, default=3800)
 parser.add_argument("--temperature", type=float, default=0.7)
 parser.add_argument("--top_p", type=float, default=0.9)
@@ -31,13 +35,13 @@ DEBUG = args.debug
 NLP = spacy.load("en_core_web_sm")
 BATCH_SIZE = 8
 USE_MIXTURE_PROBS = args.prompt_type != "none"
-MIXTURE_PATH = "./outputs/s2orc_roberta-large_200000_perc=0.5/checkpoints/checkpoint_6/"
-PROMPTING_DATA_PATH = "./test_data/generations"
+MIXTURE_PATH = args.mixture_predictor_path
+PROMPTING_DATA_PATH = os.path.dirname(args.filename)
+PROMPTING_DATA_PATH = os.path.join(PROMPTING_DATA_PATH, "inverse_output")
+os.makedirs(PROMPTING_DATA_PATH, exist_ok=True)
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
 INVERSE_MODELS = {
-    "none": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=none_perc-gold-labels=0.5_debug=False",
-    "tokens": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=tokens_debug=False",
-    "probs": "Mistral-7B-v0.3-QLoRA_lr=2e-05_max-steps=3900_num-samples=200000_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=probs_debug=False",
+    "none": "Mistral-7B-v0.3-QLoRA_dataset_name=debug_lr=2e-05_max-steps=320_num-samples=2012_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=none_debug=False",
 }
 
 def load_inverse_model(
@@ -70,8 +74,7 @@ def load_prompting_data(
 ):
     """Loads the Prompting Data.
     """
-    fname = "./test_data/s2orc.jsonl"
-    data = [json.loads(line) for line in open(fname)]
+    data = [json.loads(line) for line in open(args.filename)]
     return data
 
 def get_best_sentence_substring(
@@ -88,8 +91,9 @@ def get_best_sentence_substring(
     return substrings[min_idx].strip()
 
 def main():
-    mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
-    mixture_token_fn = mixture_predictor.tokenizer.tokenize
+    if USE_MIXTURE_PROBS:
+        mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
+        mixture_token_fn = mixture_predictor.tokenizer.tokenize
 
     data = load_prompting_data()
     inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type)
@@ -104,7 +108,7 @@ def main():
         **generation_args,
     )
     
-    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{args.prompt_type}_{args.num}")
+    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{os.path.basename(args.filename)}_{args.prompt_type}_{args.num}")
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl"
@@ -113,7 +117,7 @@ def main():
     
     for batch_idx in tqdm(range(0, len(data), BATCH_SIZE)):
         batch = data[batch_idx:batch_idx+BATCH_SIZE]
-        text = [b["generation"] for b in batch]
+        text = [b["rephrase"] for b in batch]
 
         if USE_MIXTURE_PROBS:
             mixture_probs = get_mixture_weights(
@@ -147,7 +151,7 @@ def main():
         
         outputs = []
         for j, gen in enumerate(generations):
-            gen = gen[gen.index("Output:")+len("Output:"):]
+            gen = gen[gen.index("Output: ")+len("Output: "):]
             if "\n#####\n" in gen:
                 gen = gen[:gen.index("\n#####\n")]
             else:
@@ -160,7 +164,7 @@ def main():
             elem["inverse_prompt"] = prompt_text[j]
             output_fout.write(json.dumps(elem) + "\n")
             output_fout.flush()
-             
+
         if DEBUG:
             break
 
