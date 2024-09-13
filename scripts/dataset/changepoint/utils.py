@@ -124,7 +124,6 @@ def get_unit_text(
 
 
 def split_on_string(string: str, generation: str, index_to_pick: int) -> str:
-    global NUM_STRINGS_REVERTED
     assert index_to_pick in [0, 1]
 
     generation_copy = generation
@@ -135,13 +134,11 @@ def split_on_string(string: str, generation: str, index_to_pick: int) -> str:
             generation = generation_copy
             generation = generation.split(string)[abs(index_to_pick-1)]
         if generation == "":
-            NUM_STRINGS_REVERTED += 1
             generation = generation_copy
 
     return generation
 
 def clean_segment_strings(generation: str, strings_to_remove_segment: list):
-    global NUM_STRINGS_REVERTED
     generation_copy = generation
     generation = generation.split("\n")
     index = [i for i, gen in enumerate(generation) if any(string in gen.lower() for string in strings_to_remove_segment)]
@@ -152,7 +149,6 @@ def clean_segment_strings(generation: str, strings_to_remove_segment: list):
         generation = "\n".join(generation)
     
     if generation == "":
-        NUM_STRINGS_REVERTED += 1
         return generation_copy
     else:
         return generation
