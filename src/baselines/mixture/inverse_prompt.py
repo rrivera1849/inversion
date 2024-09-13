@@ -63,7 +63,7 @@ FEWSHOT_HEADER="""Here are some examples of original passages and their rephrase
 
 GPT_NAME = "gpt-4o"
 TOKENIZER = tiktoken.encoding_for_model("gpt-4o")
-DO_PROMPT = False
+DO_PROMPT = True
 USE_MIXTURE_WEIGHTS = True
 
 if USE_MIXTURE_WEIGHTS:
@@ -293,24 +293,22 @@ if __name__ == "__main__":
     debug = False
     client = OpenAI()
     
-    print("Loading or Creating Data...")
     original_data = load_or_create_data(
         "all_units.jsonl", 
         None,
         debug=debug,
     )
-    
     print("Prompting for Rephrases...")
     rephrase_data = load_or_create_data(
-        f"rephrases_{GPT_NAME}_all.jsonl", 
+        f"generations/rephrases_Mistral-7B-Instruct-v0.3_temperature=0.7_top_p=0.9.jsonl", 
         create_rephrase_data, 
         debug=debug,
         original_data=original_data,
         client=client,
     )
-        
+    
     print("Prompting for Inverses, KEEP=False...")
-    fname = f"inverse_prompts_{GPT_NAME}_keep=False_all.jsonl"
+    fname = f"./generations/inverse_prompts_{GPT_NAME}_keep=False_all.jsonl"
     if USE_MIXTURE_WEIGHTS:
         fname = fname.replace("keep", "mixture-keep")
     inverse_data = load_or_create_data(
@@ -322,8 +320,8 @@ if __name__ == "__main__":
         with_tokens_to_keep=False,
     )
 
-    print("Prompting for Inverses, KEEP=True...")
-    fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    print("Prompting for Inverses, KEEP=True, prompt_type=\"probs\"...")
+    fname = f"./generations/inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
     if USE_MIXTURE_WEIGHTS:
         fname = fname.replace("keep", "mixture-keep")
     inverse_data = load_or_create_data(
@@ -336,7 +334,7 @@ if __name__ == "__main__":
     )
 
     print("Prompting for Inverses, KEEP=True...")
-    fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    fname = f"./generations/inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
     if USE_MIXTURE_WEIGHTS:
         fname = fname.replace("keep", "mixture-keep-probs")
     inverse_data = load_or_create_data(
@@ -348,3 +346,73 @@ if __name__ == "__main__":
         with_tokens_to_keep=True,
         tokens_to_keep_prompt="probs",
     )
+    
+    # original_data = load_or_create_data(
+    #     "author/targets.jsonl", 
+    #     None,
+    #     debug=debug,
+    # )
+    # print("Prompting for Rephrases...")
+    # rephrase_data = load_or_create_data(
+    #     f"author/targets_{GPT_NAME}_all.jsonl", 
+    #     create_rephrase_data, 
+    #     debug=debug,
+    #     original_data=original_data,
+    #     client=client,
+    # )
+    
+    # print("Loading or Creating Data...")
+    # original_data = load_or_create_data(
+    #     "all_units.jsonl", 
+    #     None,
+    #     debug=debug,
+    # )
+    
+    # print("Prompting for Rephrases...")
+    # rephrase_data = load_or_create_data(
+    #     f"rephrases_{GPT_NAME}_all.jsonl", 
+    #     create_rephrase_data, 
+    #     debug=debug,
+    #     original_data=original_data,
+    #     client=client,
+    # )
+        
+    # print("Prompting for Inverses, KEEP=False...")
+    # fname = f"inverse_prompts_{GPT_NAME}_keep=False_all.jsonl"
+    # if USE_MIXTURE_WEIGHTS:
+    #     fname = fname.replace("keep", "mixture-keep")
+    # inverse_data = load_or_create_data(
+    #     fname, 
+    #     prompt_inverse, 
+    #     debug=debug,
+    #     rephrase_data=rephrase_data,
+    #     client=client,
+    #     with_tokens_to_keep=False,
+    # )
+
+    # print("Prompting for Inverses, KEEP=True, prompt_type=\"probs\"...")
+    # fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    # if USE_MIXTURE_WEIGHTS:
+    #     fname = fname.replace("keep", "mixture-keep")
+    # inverse_data = load_or_create_data(
+    #     fname, 
+    #     prompt_inverse, 
+    #     debug=debug,
+    #     rephrase_data=rephrase_data,
+    #     client=client,
+    #     with_tokens_to_keep=True,
+    # )
+
+    # print("Prompting for Inverses, KEEP=True...")
+    # fname = f"inverse_prompts_{GPT_NAME}_keep=True_all.jsonl"
+    # if USE_MIXTURE_WEIGHTS:
+    #     fname = fname.replace("keep", "mixture-keep-probs")
+    # inverse_data = load_or_create_data(
+    #     fname, 
+    #     prompt_inverse, 
+    #     debug=debug,
+    #     rephrase_data=rephrase_data,
+    #     client=client,
+    #     with_tokens_to_keep=True,
+    #     tokens_to_keep_prompt="probs",
+    # )
