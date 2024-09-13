@@ -28,9 +28,12 @@ def process(
     
     basename = os.path.basename(path)
     fout_name = os.path.join(os.path.dirname(path), f"{basename}.mixture")
+    if os.path.isfile(fout_name):
+        os.remove(fout_name)
     for chunk in tqdm(chunk_it):
-        weights = get_mixture_weights(mixture_predictor, chunk["generation"].tolist(), key=None, batch_size=512, progress_bar=False)
-        tokens = [mixture_predictor.tokenizer.tokenize(sample) for sample in chunk["generation"].tolist()]
+        key = "generation" if "generation" in chunk.columns else "rephrase"
+        weights = get_mixture_weights(mixture_predictor, chunk[key].tolist(), key=None, batch_size=512, progress_bar=False)
+        tokens = [mixture_predictor.tokenizer.tokenize(sample) for sample in chunk[key].tolist()]
         chunk["mixture_probs"] = weights
         chunk["mixture_tokens"] = tokens
         chunk.to_json(fout_name, lines=True, orient="records", mode="a")
