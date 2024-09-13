@@ -66,6 +66,7 @@ def build_inverse_prompt(
     prompt_type: str = "none",
     no_stop_tokens: bool = False,
 ) -> str:
+    base_instruction = "The following passage is a mix of human and machine text, recover the original human text:"
     if prompt_type == "tokens":
         tokens_to_keep = "Keep these tokens while rephrasing, Ġ is a single space: "
         added_tokens = False
@@ -75,9 +76,9 @@ def build_inverse_prompt(
                 added_tokens = True
                 
         if not added_tokens:
-            instruction = "Rephrase:"
+            instruction = base_instruction
         else:
-            instruction = f"""{tokens_to_keep[:-2]}\nRephrase:"""
+            instruction = f"""{tokens_to_keep[:-2]}\n{base_instruction}"""
     elif prompt_type in ["probs", "logprobs"]:
         log_fn = math.log if prompt_type == "logprobs" else lambda x: x
 
@@ -90,15 +91,15 @@ def build_inverse_prompt(
             header = "Input Format: Token_1[prob_human], Token_2[prob_human], ... Token_N[prob_human]"
         else:
             header = "Input Format: Token_1[log_prob_human], Token_2[log_prob_human], ... Token_N[log_prob_human]"
-        instruction = f"""{header}\n{token_and_probs}\nRephrase:"""
+        instruction = f"""{header}\n{token_and_probs}\n{base_instruction}"""
     else:
-        instruction = "Rephrase:"
+        instruction = base_instruction
 
     stop_tokens = "\n#####\n"
     if no_stop_tokens:
-        prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}"
+        prompt = f"[INST] {instruction} {generation}[/INST]\nOutput: {original}"
     else:
-        prompt = f"[INST] {instruction} {generation} [/INST]\nOutput: {original}{stop_tokens}"
+        prompt = f"[INST] {instruction} {generation}[/INST]\nOutput: {original}{stop_tokens}"
     return prompt
 
 def get_levenshtein_tags(
