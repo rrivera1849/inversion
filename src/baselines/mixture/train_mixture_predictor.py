@@ -25,6 +25,7 @@ from transformers import AutoTokenizer
 from tqdm import tqdm
 
 from model import MixturePredictor
+from utils import get_levenshtein_tags
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_dirname", type=str,
@@ -57,6 +58,18 @@ METRICS = {
     "recall": recall_score,
 }
 
+def is_inverse_data(df):
+    return "original" in df.columns and "generation" in df.columns
+
+def is_author_data(df):
+    return "author_id" in df.columns
+
+def get_tagger_labels(generation: str, original: str, tokenizer_fn: callable):
+    tags = get_levenshtein_tags(generation, original, tokenizer_fn)
+    # 1 in case it's machine, 0 otherwise
+    tagger_labels = [int(tag != "KEEP") for tag in tags]
+    return tagger_labels
+
 class JSONLDataset(Dataset):
     def __init__(self, path):
         self.dataset = pd.read_json(path, lines=True)
@@ -67,21 +80,43 @@ class JSONLDataset(Dataset):
         # In case we're reading from the inverse dataset:
         self.tokenizer = AutoTokenizer.from_pretrained("roberta-large")
 
+        self.is_inverse_data = is_inverse_data(self.dataset)
+        self.is_author_data = is_author_data(self.dataset)
+
     def __len__(self):
         return len(self.dataset)
     
+    def process_inverse_sample(self, sample):
+        # In case we're reading from the inverse dataset:
+        if random.random() < 0.5:
+            text = sample["original"]
+            sample["tagger_labels"] = [0] * len(self.tokenizer.tokenize(text))
+            sample["label"] = 0
+        else:
+            text = sample["generation"]
+        sample.update(self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=512, truncation=True))
+        return sample
+
+    def process_author_sample(self, sample):
+        # In case we're reading from the author dataset:
+        if random.random() < 0.5:
+            text = sample["unit"]
+            sample["tagger_labels"] = [0] * len(self.tokenizer.tokenize(text))
+            sample["label"] = 0
+        else:
+            text = sample["rephrase"]
+            sample["tagger_labels"] = get_tagger_labels(sample["rephrase"], sample["unit"], self.tokenizer.tokenize)
+            sample["label"] = 1
+        sample.update(self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=512, truncation=True))
+        return sample
+
     def __getitem__(self, idx):
         sample =  self.dataset.iloc[idx].to_dict()
 
-        # In case we're reading from the inverse dataset:
-        if "original" in sample:
-            if random.random() < 0.5:
-                text = sample["original"]
-                sample["tagger_labels"] = [0] * len(self.tokenizer.tokenize(text))
-                sample["label"] = 0
-            else:
-                text = sample["generation"]
-            sample.update(self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=512, truncation=True))
+        if self.is_inverse_data:
+            sample = self.process_inverse_sample(sample)
+        elif self.is_author_data:
+            sample = self.process_author_sample(sample)
 
         return sample
     
