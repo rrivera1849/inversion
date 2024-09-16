@@ -7,20 +7,24 @@ from argparse import ArgumentParser
 from collections import OrderedDict
 from typing import Dict, Union
 
+from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from termcolor import colored
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
-    DataCollatorForLanguageModeling,
-    Trainer,
-    TrainingArguments,
 )
-from tqdm import tqdm
+from trl import (
+    SFTConfig, 
+    SFTTrainer, 
+    DataCollatorForCompletionOnlyLM,
+    set_seed
+)
 
 from utils import build_inverse_prompt
 
-random.seed(43)
+set_seed(43)
+OUTPUT_DIR = "/data1/yubnub/changepoint/models/inverse"
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str,
@@ -40,8 +44,6 @@ parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                     help="Number of gradient accumulation steps.")
 parser.add_argument("--perc", type=float, default=1.0,
                     help="Percentage of the training dataset to use.")
-parser.add_argument("--loss_on_completions_only", default=False, action="store_true",
-                    help="Whether to compute the loss only on completions.")
 
 # LoRA Parameters:
 parser.add_argument("--lora_r", type=float, default=32,
@@ -61,17 +63,9 @@ parser.add_argument("--perc_gold_labels", type=float, default=0.5,
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
-if args.prompt_type in ["probs", "logprobs"]:
-    MAX_LENGTH = 2048
-elif args.prompt_type == "tokens":
-    MAX_LENGTH = 1024
-else:
-    MAX_LENGTH = (128 + 32) * 2 # 320
-
 MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 tokenizer = AutoTokenizer.from_pretrained(
     MODEL_NAME,
-    model_max_lenght=MAX_LENGTH,
     padding_side="left",
     add_eos_token=True,
 )
@@ -98,30 +92,6 @@ def load_model():
 
     return peft_model
 
-def tokenize_and_pad_to_fixed_length(
-    sample: str
-) -> Dict[str, list[int]]:
-    result = tokenizer(
-        sample,
-        truncation=True,
-        max_length=MAX_LENGTH,
-        padding="max_length",
-    )
-    result["labels"] = result["input_ids"].copy()
-    if args.loss_on_completions_only:
-        output_ids = tokenizer("[/INST]\nOutput:", add_special_tokens=False)["input_ids"]
-        _, end = [(start, start+len(output_ids)) for start in range(len(result["input_ids"])) if result["input_ids"][start:start+len(output_ids)] == output_ids][0]
-        start = result["input_ids"].index(tokenizer("<s>", add_special_tokens=False)["input_ids"][0])
-        result["labels"][start:end] = [-100] * (end-start+1)
-
-    return result
-
-def get_valid_key(keys: list[str], valid_names: list[str]) -> str:
-    for key in keys:
-        if key in valid_names:
-            return key
-    assert False
-    
 def load_dataset() -> Union[list[Dict[str, list[int]]]]:
     N = 100 if args.debug else None
     train_data = []
@@ -154,19 +124,30 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
             if N is not None and i >= N:
                 break
 
-    genkey = get_valid_key(train_data[0].keys(), ["generation", "rephrase"])
-    origkey = get_valid_key(train_data[0].keys(), ["original", "unit"])
-    if args.prompt_type != "none":
-        train_text = [build_inverse_prompt(data[genkey], data[origkey], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in train_data]
-        valid_text = [build_inverse_prompt(data[genkey], data[origkey], data["mixture_tokens"], data["mixture_probs"], prompt_type=args.prompt_type) for data in valid_data]
-    else:
-        train_text = [build_inverse_prompt(data[genkey], data[origkey]) for data in train_data]
-        valid_text = [build_inverse_prompt(data[genkey], data[origkey]) for data in valid_data]
+    train_data = Dataset.from_list(train_data)
+    valid_data = Dataset.from_list(valid_data)
+    return train_data, valid_data
 
-    train_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(train_text)]
-    valid_samples = [tokenize_and_pad_to_fixed_length(sample) for sample in tqdm(valid_text)]
-
-    return train_samples, valid_samples
+def get_valid_key(keys: list[str], valid_names: list[str]) -> str:
+    for key in keys:
+        if key in valid_names:
+            return key
+    assert False
+    
+def formatting_func(example: Dataset) -> list[str]:
+    """Builds the inverse prompt for the generation task.
+    """
+    genkey = get_valid_key(example.keys(), ["generation", "rephrase"])
+    origkey = get_valid_key(example.keys(), ["original", "unit"])
+    
+    texts = []
+    for i in range(len(example)):
+        if args.prompt_type != "none":
+            text = build_inverse_prompt(example[genkey][i], example[origkey][i], example["mixture_tokens"][i], example["mixture_probs"][i], prompt_type=args.prompt_type)
+        else:
+            text = build_inverse_prompt(example[genkey][i], example[origkey][i])
+        texts.append(text)
+    return texts
 
 def mix_gold_labels(
     weights: list[list[tuple[int, int]]], 
@@ -178,25 +159,36 @@ def mix_gold_labels(
             weights[i] = gold_labels
     return weights
 
-def get_run_name(train_samples):
-    run_name_items = OrderedDict({
-        "dataset_name": os.path.basename(args.dataset_path),
-        "lr": args.lr,
-        "max-steps": args.max_steps,
-        "num-samples": len(train_samples),
-        "r": args.lora_r,
-        "alpha": args.lora_alpha,
-        "dropout": args.lora_dropout,
-        "perc": args.perc,
-        "prompt": args.prompt_type,
-    })
-    if args.prompt_type in ["probs", "logprobs", "tokens"]:
-        run_name_items["perc-gold-labels"] = args.perc_gold_labels
-    run_name_items["debug"] = args.debug
-    run_name = "Mistral-7B-v0.3-QLoRA"
-    for key, value in run_name_items.items():
-        run_name += f"_{key}={value}"
+def get_experiment_dir() -> str:
+    dataset_name = os.path.basename(args.dataset_path)
+    experiment_dir = os.path.join(dataset_name, args.prompt_type)
+    experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
+    os.makedirs(experiment_dir, exist_ok=True)
+    return experiment_dir
+
+def get_run_name() -> str:
+    run_name = f"r={args.lora_r}_alpha={args.lora_alpha}_dropout={args.lora_dropout}_perc={args.perc}_perc-gold-labels={args.perc_gold_labels}"
     return run_name
+
+def save_hparams(experiment_dir: str, run_name: str) -> None:
+    hparams = OrderedDict(
+        dataset_path=args.dataset_path,
+        lr=args.lr,
+        max_steps=args.max_steps,
+        save_steps=args.save_steps,
+        logging_steps=args.logging_steps,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        perc=args.perc,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        prompt_type=args.prompt_type,
+        perc_gold_labels=args.perc_gold_labels,
+    )
+    os.makedirs(os.path.join(experiment_dir, run_name), exist_ok=True)
+    with open(os.path.join(experiment_dir, run_name, "hparams.json"), "w") as fout:
+        json.dump(hparams, fout, indent=4)
 
 def main():
     if args.debug:
@@ -206,24 +198,25 @@ def main():
         print(colored(f"\t{key} = {value}", "yellow"))
     
     train_samples, test_samples = load_dataset()
+    response_template = "[/INST]\n###Output:"
     print(colored(f"len(train_samples)={len(train_samples)}", "yellow"))
     print(colored(f"len(test_samples)={len(test_samples)}", "yellow"))
-    
-    run_name = get_run_name(train_samples)
-    print(colored(f"run_name={run_name}", "cyan"))
-    
-    output_dir = os.path.join("/data1/yubnub/changepoint/models/inverse", run_name)
-    os.makedirs(output_dir, exist_ok=True)
 
+    experiment_dir = get_experiment_dir()
+    run_name = get_run_name()
+    save_hparams(experiment_dir, run_name)
+    
     peft_model = load_model()
 
     max_steps = 20 if args.debug else args.max_steps
     save_steps = 10 if args.debug else args.save_steps
     logging_steps = 1 if args.debug else args.logging_steps
-    training_args = TrainingArguments(
+
+    config = SFTConfig(
+        max_seq_length=4096,
         report_to="tensorboard",
+        output_dir=os.path.join(experiment_dir, run_name),
         run_name=run_name,
-        output_dir=output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing=True,
@@ -238,18 +231,16 @@ def main():
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
     )
-
-    trainer = Trainer(
+    print(colored("response_template: ", "cyan"), response_template)
+    trainer = SFTTrainer(
+        args=config,
         model=peft_model,
         train_dataset=train_samples,
-        data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
-        args=training_args,
+        data_collator=DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer),
+        formatting_func=formatting_func,
     )
-    # use_cache=True is incompatible with gradient checkpointing.
-    peft_model.config.use_cache = False
     
     trainer.train()
-    
     test_metrics = trainer.evaluate(test_samples)
     print(test_metrics)
 
