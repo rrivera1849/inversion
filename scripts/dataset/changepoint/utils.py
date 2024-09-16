@@ -153,7 +153,7 @@ def clean_segment_strings(generation: str, strings_to_remove_segment: list):
     else:
         return generation
 
-def clean_generation(generation: Union[str, list[str]]) -> str:
+def clean_generation(generation: Union[str, list[str]], is_reddit: bool = False) -> str:
     if isinstance(generation, list):
         result = []
         for g in generation:
@@ -180,26 +180,29 @@ def clean_generation(generation: Union[str, list[str]]) -> str:
         ("Sure, here is the continuation:\n\n", 0),
         ("To rephrase the given passage, we can say:", 1),
         ("Only output the continuation, do not include any other details.", 1),
+        ("Only output the continuation, do not include any other details.", 1),
         ("\n\n ", 1),
         ("\n ", 1),
-        ("\n", 1)
+        ("\n", 1),
     ]
-    
+
     for string, index in strings_to_remove_and_index:
         generation = split_on_string(string, generation, index)
     # split on newlines, and remove all segments that contain the following strings:
     strings_to_remove_segment = [
         "note:", 
         "please note that the rephrased passage", 
-        "rephrased passage"
+        "rephrased passage",
+        "alternatively:",
     ]
     generation = clean_segment_strings(generation, strings_to_remove_segment)
 
     # remove things that don't end with punctuation, closed parenthesis, and other legal things...
-    generation_copy = generation
-    if generation[-1] not in [".", "?", "!", ")", "]", "$", '"']:
-        generation = generation.rsplit(".", 1)[0] + "."
-        if generation[-2] in "0123456789":
-            generation = generation_copy
+    if not is_reddit:
+        generation_copy = generation
+        if generation[-1] not in [".", "?", "!", ")", "]", "$", '"']:
+            generation = generation.rsplit(".", 1)[0] + "."
+            if generation[-2] in "0123456789":
+                generation = generation_copy
 
     return generation

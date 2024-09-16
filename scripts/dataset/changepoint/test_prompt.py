@@ -17,6 +17,8 @@ from utils import clean_generation
 random.seed(43)
 
 parser = ArgumentParser()
+parser.add_argument("--dataset_path", type=str, default=None, required=True,
+                    help="Path to the dataset to generate prompts for.")
 parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
                     choices=["mistralai/Mistral-7B-Instruct-v0.3", 
                              "meta-llama/Meta-Llama-3-8B-Instruct",
@@ -43,10 +45,12 @@ args = parser.parse_args()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
 
-dataset_path = "/data1/yubnub/changepoint/MUD_inverse/debug.jsonl.ready_for_generation"
-DATASET = pd.read_json(dataset_path, lines=True)
+DATASET = pd.read_json(args.dataset_path, lines=True)
+DATASET.rename(columns={"syms": "unit"}, inplace=True)
+to_expode = [col for col in DATASET.columns if col != "author_id"]
+DATASET = DATASET.explode(to_expode).reset_index(drop=True)
+
 PROMPT = get_prompt("rephrase")
-global NUM_STRINGS_REVERTED
 
 attn_implementation = "flash_attention_2" if "Phi-3" in args.model_name else None
 model = AutoModelForCausalLM.from_pretrained(
@@ -116,8 +120,7 @@ def get_generations(prompts, sub_batch_size=1):
     assert len(generations) == sum(len(prompt_batch) for prompt_batch in prompts)
     return generations
 
-basename, dirname = os.path.basename(dataset_path), os.path.dirname(dataset_path)
-basename = basename.split(".")[0]
+basename, dirname = os.path.basename(args.dataset_path), os.path.dirname(args.dataset_path)
 dataset_name = "{}_{}_rephrases_temperature={}_top_p={}.jsonl".format(
     basename, args.model_name.split("/")[1], args.temperature, args.top_p
 )
@@ -171,8 +174,9 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
         index = dataset_indices[j]
         record = DATASET.iloc[index].to_dict()
         record["model_name"] = args.model_name.split("/")[1]
-        record["rephrase"] = clean_generation(generations[j])
+        record["rephrase"] = clean_generation(generations[j], is_reddit=True)
         record["rephrase_prompt"] = prompts[j]
+        record["dataset_index"] = index
         fout.write(json.dumps(record) + "\n")
 
     if args.debug:
