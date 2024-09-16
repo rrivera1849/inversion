@@ -1,6 +1,6 @@
-"""
-We want:
-- Perplexity
+"""Inverse Inference on the Test Split.
+
+TODO: PPL Evaluation
 """
 
 import json
@@ -10,48 +10,64 @@ from argparse import ArgumentParser
 
 import spacy
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, set_seed
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
+    GenerationConfig, 
+    set_seed,
+)
 from termcolor import colored
 from tqdm import tqdm
 
-from utils import build_inverse_prompt, get_mixture_weights, load_mixture_predictor
+from utils import (
+    build_inverse_prompt, 
+    get_mixture_weights, 
+    load_mixture_predictor,
+)
 
 set_seed(43)
 
 parser = ArgumentParser()
-parser.add_argument("--filename", type=str, default=None)
-parser.add_argument("--prompt_type", type=str, default="none",
-                    choices=["none", "probs", "logprobs", "tokens"])
-parser.add_argument("--mixture_predictor_path", type=str,
-                    default=None,
+parser.add_argument("--dataset_name", type=str, 
+                    default="data.jsonl.filtered.cleaned_kmeans_100")
+parser.add_argument("--prompt_type", type=str, default="none")
+parser.add_argument("--mixture_predictor_path", type=str, default=None,
                     help="Path to the mixture predictor model.")
-parser.add_argument("--num", type=int, default=3800)
+parser.add_argument("--num", type=int, default=320*4)
 parser.add_argument("--temperature", type=float, default=0.7)
 parser.add_argument("--top_p", type=float, default=0.9)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
 DEBUG = args.debug
-NLP = spacy.load("en_core_web_sm")
-BATCH_SIZE = 8
-USE_MIXTURE_PROBS = args.prompt_type != "none"
-MIXTURE_PATH = args.mixture_predictor_path
-PROMPTING_DATA_PATH = os.path.dirname(args.filename)
-PROMPTING_DATA_PATH = os.path.join(PROMPTING_DATA_PATH, "inverse_output")
+
+BATCH_SIZE = 20
+DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
+assert os.path.isdir(os.path.join(DATA_PATH, args.dataset_name))
+
+PROMPTING_DATA_PATH = os.path.join(DATA_PATH, args.dataset_name, "inverse_output")
 os.makedirs(PROMPTING_DATA_PATH, exist_ok=True)
+
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
 INVERSE_MODELS = {
-    "none": "Mistral-7B-v0.3-QLoRA_dataset_name=debug_lr=2e-05_max-steps=320_num-samples=2012_r=32_alpha=64_dropout=0.1_perc=1.0_prompt=none_debug=False",
+    "none": "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.5",
 }
+assert args.prompt_type in INVERSE_MODELS
+NLP = spacy.load("en_core_web_sm")
 
 def load_inverse_model(
-    prompt_type: str = "no_mixture",
+    prompt_type: str = "none",
 ):
     """Loads our inversion model, either with or without Mixture Weights in the prompt.
     """
     inverse_model = INVERSE_MODELS[prompt_type]
-    print(colored("Loading: ", "green"), inverse_model)
-    checkpoint_path = os.path.join(INVERSE_SAVEPATH, inverse_model, f"checkpoint-{args.num}")
+    checkpoint_path = os.path.join(
+        INVERSE_SAVEPATH, 
+        args.dataset_name, 
+        args.prompt_type, 
+        inverse_model, 
+        f"checkpoint-{args.num}"
+    )
 
     inverse_model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,        
@@ -74,7 +90,8 @@ def load_prompting_data(
 ):
     """Loads the Prompting Data.
     """
-    data = [json.loads(line) for line in open(args.filename)]
+    filename = os.path.join(DATA_PATH, args.dataset_name, "test.jsonl")
+    data = [json.loads(line) for line in open(filename)]
     return data
 
 def get_best_sentence_substring(
@@ -91,8 +108,8 @@ def get_best_sentence_substring(
     return substrings[min_idx].strip()
 
 def main():
-    if USE_MIXTURE_PROBS:
-        mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
+    if args.prompt_type != "none":
+        mixture_predictor = load_mixture_predictor(args.mixture_predictor_path)
         mixture_token_fn = mixture_predictor.tokenizer.tokenize
 
     data = load_prompting_data()
@@ -102,13 +119,17 @@ def main():
         "temperature": args.temperature,
         "top_p": args.top_p,
     }
+    unit_length = 128 + 32
     generation_config = GenerationConfig(
         do_sample=True,
-        max_new_tokens=128+32,
+        max_new_tokens=unit_length,
         **generation_args,
     )
     
-    output_fname = os.path.join(PROMPTING_DATA_PATH, f"{os.path.basename(args.filename)}_{args.prompt_type}_{args.num}")
+    output_fname = os.path.join(
+        PROMPTING_DATA_PATH, 
+        f"{args.prompt_type}_{args.num}"
+    )
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl"
@@ -119,7 +140,7 @@ def main():
         batch = data[batch_idx:batch_idx+BATCH_SIZE]
         text = [b["rephrase"] for b in batch]
 
-        if USE_MIXTURE_PROBS:
+        if args.prompt_type != "none":
             mixture_probs = get_mixture_weights(
                 mixture_predictor,
                 text,
@@ -165,7 +186,7 @@ def main():
             output_fout.write(json.dumps(elem) + "\n")
             output_fout.flush()
 
-        if DEBUG:
+        if DEBUG and batch_idx >= BATCH_SIZE * 10:
             break
 
     return 0

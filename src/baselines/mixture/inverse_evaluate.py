@@ -8,17 +8,12 @@ import pandas as pd
 import torch
 from transformers import AutoModel, AutoTokenizer
 from sentence_transformers import SentenceTransformer, util
-from sklearn.metrics import roc_auc_score
 
-from utils import load_mixture_predictor, get_mixture_weights
-
-# MIXTURE_PATH = "./outputs/s2orc_roberta-large_200000_perc=0.5/checkpoints/checkpoint_6/"
 bleu = evaluate.load("bleu")
 sbert = SentenceTransformer("all-mpnet-base-v2")
 luar = AutoModel.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
 luar.to("cuda").eval()
 luar_tok = AutoTokenizer.from_pretrained("rrivera1849/LUAR-MUD", trust_remote_code=True)
-# mixture_predictor = load_mixture_predictor(MIXTURE_PATH)
 
 def cosine_similarity(
     embeddings_1: torch.Tensor,
@@ -102,35 +97,9 @@ def token_f1(
         F1s.append(f1)
     return sum(F1s) / len(F1s), F1s
 
-# def get_MTD_score(
-#     candidates: list[str], 
-#     units: list[str], 
-#     max_fpr: int = 0.01
-# ):
-#     out_candidates = get_mixture_weights(
-#         mixture_predictor,
-#         candidates, key=None, 
-#         return_sequence_probs=True,
-#         progress_bar=False,
-#     )[0]
-#     out_units = get_mixture_weights(
-#         mixture_predictor,
-#         units, 
-#         key=None,
-#         return_sequence_probs=True,
-#         progress_bar=False,
-#     )[0]
-    
-#     score_candidates = [out[1] for out in out_candidates]
-#     score_units = [out[1] for out in out_units]
-#     scores = score_candidates + score_units
-#     labels = [1] * len(score_candidates) + [0] * len(score_units)
-#     AUC = roc_auc_score(labels, scores, max_fpr=max_fpr)
-#     return AUC
-
 def main():
     metrics = {}
-    dataset_path = "/data1/yubnub/changepoint/MUD_inverse/debug_separate_authors/inverse_output"
+    dataset_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
     for filename in os.listdir(dataset_path):
         path = os.path.join(dataset_path, filename)
         if not path.endswith(".jsonl"):
@@ -150,7 +119,6 @@ def main():
         metrics[name] = {}
         metrics[name]["bleu"] = bleu.compute(predictions=candidates, references=references)["bleu"]
         metrics[name]["token_f1"] = token_f1(candidates, references)
-        # metrics[name]["mtd_score"] = get_MTD_score(candidates, references)
         metrics[name]["sbert_similarity"] = calculate_embedding_similarity(candidates, references, "sbert")
         metrics[name]["luar_similarity"] = calculate_embedding_similarity(candidates, references, "luar")
 
@@ -160,7 +128,7 @@ def main():
         print('\t', "SBERT Sim.", metrics[name]["sbert_similarity"][0])
 
     df = pd.DataFrame.from_dict(metrics, orient="index")
-    df.to_json("results.json", orient="index")
+    # df.to_json("results.json", orient="index")
 
 if __name__ == "__main__":
     sys.exit(main())

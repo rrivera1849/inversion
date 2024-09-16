@@ -97,9 +97,9 @@ def build_inverse_prompt(
 
     stop_tokens = "\n#####\n"
     if no_stop_tokens:
-        prompt = f"[INST] {instruction} {generation}[/INST]\nOutput: {original}"
+        prompt = f"[INST] {instruction} {generation}[/INST]\n###Output: {original}"
     else:
-        prompt = f"[INST] {instruction} {generation}[/INST]\nOutput: {original}{stop_tokens}"
+        prompt = f"[INST] {instruction} {generation}[/INST]\n###Output: {original}{stop_tokens}"
     return prompt
 
 def get_levenshtein_tags(
