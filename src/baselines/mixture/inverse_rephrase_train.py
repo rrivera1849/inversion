@@ -5,8 +5,9 @@ import random
 import sys
 from argparse import ArgumentParser
 from collections import OrderedDict
-from typing import Dict, Union
 
+import torch
+from accelerate import PartialState
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from termcolor import colored
@@ -34,14 +35,21 @@ parser.add_argument("--lr", type=float, default=2e-5,
                     help="Learning rate.")
 parser.add_argument("--max_steps", type=int, default=1000,
                     help="Number of training steps.")
+parser.add_argument("--resume_from_checkpoint", default=False,
+                    action="store_true",
+                    help="Whether to resume from a checkpoint.")
 parser.add_argument("--save_steps", type=int, default=200,
                     help="Number of steps to save the model.")
 parser.add_argument("--logging_steps", type=int, default=100,
                     help="Number of steps to log the training metrics.")
-parser.add_argument("--per_device_train_batch_size", type=int, default=64,
+parser.add_argument("--per_device_train_batch_size", type=int, default=16,
                     help="Batch size per device.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                     help="Number of gradient accumulation steps.")
+parser.add_argument("--neftune", default=False, action="store_true",
+                    help="Whether to use the NEFT-Tune.")
+parser.add_argument("--neftune_alpha", type=float, default=5.,
+                    help="NEFT-Tune alpha parameter.")
 parser.add_argument("--perc", type=float, default=1.0,
                     help="Percentage of the training dataset to use.")
 
@@ -66,17 +74,22 @@ parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
 MODEL_NAME = "mistralai/Mistral-7B-v0.3"
-tokenizer = AutoTokenizer.from_pretrained(
-    MODEL_NAME,
-    padding_side="left",
-    add_eos_token=True,
-)
-tokenizer.pad_token = tokenizer.eos_token
 
-def load_model():
+def get_max_seq_length():
+    if args.prompt_type == "none":
+        return 512
+    elif args.prompt_type == "tokens":
+        return 1024
+    else:
+        return 2048
+
+def load_model_and_tokenizer():
+    device_string = PartialState().process_index 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, 
-        device_map="auto",
+        device_map={'':device_string},
+        attn_implementation="flash_attention_2",
+        torch_dtype=torch.bfloat16,
     )
     # https://github.com/huggingface/peft/issues/137
     model.enable_input_require_grads()
@@ -89,12 +102,17 @@ def load_model():
         target_modules="all-linear",
         bias="none", # keeps the original model perform equally when the adapter is not used
     )
-    peft_model = get_peft_model(model, peft_config)
-    peft_model.print_trainable_parameters()
+    model = get_peft_model(model, peft_config)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_NAME,
+        padding_side="left",
+        add_eos_token=True,
+    )
+        
+    tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
 
-    return peft_model
-
-def load_dataset() -> Union[list[Dict[str, list[int]]]]:
+def load_dataset() -> tuple[list[str, list[str]]]:
     N = 100 if args.debug else None
     train_data = []
     valid_data = []
@@ -174,6 +192,8 @@ def mix_gold_labels(
     weights: list[list[tuple[int, int]]], 
     data: dict
 ):
+    """Mixes the gold token probabilities in our training data.
+    """
     for i in range(len(data)):
         if random.random() > args.perc_gold_labels:
             gold_labels = [[abs(1 - label), label] for label in data[i]["tagger_labels"]]
@@ -191,6 +211,8 @@ def get_experiment_dir() -> str:
 
 def get_run_name() -> str:
     run_name = f"r={args.lora_r}_alpha={args.lora_alpha}_dropout={args.lora_dropout}_perc={args.perc}_perc-gold-labels={args.perc_gold_labels}"
+    if args.neftune:
+        run_name += f"_neftune-alpha={args.neftune_alpha}"
     return run_name
 
 def save_hparams(experiment_dir: str, run_name: str) -> None:
@@ -229,14 +251,19 @@ def main():
     run_name = get_run_name()
     save_hparams(experiment_dir, run_name)
     
-    peft_model = load_model()
+    model, tokenizer = load_model_and_tokenizer()
 
     max_steps = 20 if args.debug else args.max_steps
     save_steps = 10 if args.debug else args.save_steps
     logging_steps = 1 if args.debug else args.logging_steps
 
+    if args.neftune:
+        kwargs = {"neftune_noise_alpha": args.neftune_alpha}
+    else:
+        kwargs = {}
+
     config = SFTConfig(
-        max_seq_length=4096,
+        max_seq_length=get_max_seq_length(),
         report_to="tensorboard",
         output_dir=os.path.join(experiment_dir, run_name),
         run_name=run_name,
@@ -253,18 +280,21 @@ def main():
         warmup_steps=int(0.01 * args.max_steps),
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
+        **kwargs,
     )
     trainer = SFTTrainer(
         args=config,
-        model=peft_model,
+        model=model,
         train_dataset=train_samples,
         data_collator=DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer),
         formatting_func=formatting_func,
     )
     
-    trainer.train()
-    test_metrics = trainer.evaluate(test_samples)
-    print(test_metrics)
+    trainer.train(
+        resume_from_checkpoint=args.resume_from_checkpoint,
+    )
+    # test_metrics = trainer.evaluate(test_samples)
+    # print(test_metrics)
 
 if __name__ == "__main__":
     assert args.perc > 0.0 and args.perc <= 1.0
