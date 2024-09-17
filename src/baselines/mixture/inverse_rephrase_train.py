@@ -280,6 +280,7 @@ def main():
         warmup_steps=int(0.01 * args.max_steps),
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
+        gradient_checkpointing_kwargs={"use_reentrant" : False},
         **kwargs,
     )
     trainer = SFTTrainer(
