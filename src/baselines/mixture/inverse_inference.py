@@ -13,10 +13,10 @@ import torch
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
+    BitsAndBytesConfig,
     GenerationConfig, 
     set_seed,
 )
-from termcolor import colored
 from tqdm import tqdm
 
 from utils import (
@@ -30,6 +30,7 @@ set_seed(43)
 parser = ArgumentParser()
 parser.add_argument("--dataset_name", type=str, 
                     default="data.jsonl.filtered.cleaned_kmeans_100")
+parser.add_argument("--filename", type=str, default="test.jsonl")
 parser.add_argument("--prompt_type", type=str, default="none")
 parser.add_argument("--mixture_predictor_path", type=str, default=None,
                     help="Path to the mixture predictor model.")
@@ -68,12 +69,13 @@ def load_inverse_model(
         inverse_model, 
         f"checkpoint-{args.num}"
     )
-
+    
     inverse_model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,        
-        torch_dtype=torch.float16,
         device_map="auto",
+        torch_dtype=torch.bfloat16,
     )
+    inverse_model = torch.compile(inverse_model)
     inverse_model.eval()
 
     inverse_tokenizer = AutoTokenizer.from_pretrained(
@@ -90,7 +92,7 @@ def load_prompting_data(
 ):
     """Loads the Prompting Data.
     """
-    filename = os.path.join(DATA_PATH, args.dataset_name, "test.jsonl")
+    filename = os.path.join(DATA_PATH, args.dataset_name, args.filename)
     data = [json.loads(line) for line in open(filename)]
     return data
 

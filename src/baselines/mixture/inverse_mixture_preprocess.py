@@ -9,10 +9,10 @@ from tqdm import tqdm
 from utils import load_mixture_predictor, get_mixture_weights
 
 parser = ArgumentParser()
-parser.add_argument("--dataset_path", type=str, default="./datasets/s2orc_roberta-large_200000_inverse",
-                    help="Name of the model to use.")
+parser.add_argument("--dataset_path", type=str, 
+                    default="/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100")
 parser.add_argument("--mixture_predictor_path", type=str,
-                    default="./outputs/s2orc_roberta-large_200000_perc=0.5/checkpoints/checkpoint_6",
+                    default="./outputs/MUD_politics_perc=0.5/checkpoints/checkpoint_1",
                     help="Path to the mixture predictor model.")
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()

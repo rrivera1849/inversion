@@ -56,6 +56,8 @@ parser.add_argument("--lora_dropout", type=float, default=0.1,
 parser.add_argument("--prompt_type", type=str, default="none",
                     choices=["none", "tokens", "probs", "logprobs"],
                     help="Type of prompt to use for conditioning the generation.")
+parser.add_argument("--with_cluster_id", default=False, action="store_true",
+                    help="Whether to use the cluster_id for conditioning the generation.")
 
 parser.add_argument("--perc_gold_labels", type=float, default=0.5, 
                     help="Percentage of gold labels to use for conditioning the generation.")
@@ -123,6 +125,13 @@ def load_dataset() -> Union[list[Dict[str, list[int]]]]:
                 print(colored(f"Loaded {i} validation samples", "yellow"))
             if N is not None and i >= N:
                 break
+            
+    if args.with_cluster_id:
+        mapping = json.loads(open(os.path.join(args.dataset_path, "author_id_to_cluster_center.json")).read())
+        for data in train_data:
+            data["cluster_id"] = mapping[data["author_id"]]
+        for data in valid_data:
+            data["cluster_id"] = mapping[data["author_id"]]
 
     train_data = Dataset.from_list(train_data)
     valid_data = Dataset.from_list(valid_data)
@@ -137,16 +146,28 @@ def get_valid_key(keys: list[str], valid_names: list[str]) -> str:
 def formatting_func(example: Dataset) -> list[str]:
     """Builds the inverse prompt for the generation task.
     """
-    genkey = get_valid_key(example.keys(), ["generation", "rephrase"])
-    origkey = get_valid_key(example.keys(), ["original", "unit"])
-    
+    genkey = get_valid_key(example, ["generation", "rephrase"])
+    origkey = get_valid_key(example, ["original", "unit"])
+
     texts = []
-    for i in range(len(example)):
+    for i in range(len(example[genkey])):
         if args.prompt_type != "none":
-            text = build_inverse_prompt(example[genkey][i], example[origkey][i], example["mixture_tokens"][i], example["mixture_probs"][i], prompt_type=args.prompt_type)
+            text = build_inverse_prompt(
+                example[genkey][i], 
+                example[origkey][i], 
+                example["mixture_tokens"][i], 
+                example["mixture_probs"][i], 
+                prompt_type=args.prompt_type,
+                cluster_id=example["cluster_id"][i] if args.with_cluster_id else None,
+            )
         else:
-            text = build_inverse_prompt(example[genkey][i], example[origkey][i])
+            text = build_inverse_prompt(
+                example[genkey][i], 
+                example[origkey][i],
+                cluster_id=example["cluster_id"][i] if args.with_cluster_id else None,
+            )
         texts.append(text)
+        
     return texts
 
 def mix_gold_labels(
@@ -162,6 +183,8 @@ def mix_gold_labels(
 def get_experiment_dir() -> str:
     dataset_name = os.path.basename(args.dataset_path)
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
+    if args.with_cluster_id:
+        experiment_dir += "_cluster_id"
     experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
     os.makedirs(experiment_dir, exist_ok=True)
     return experiment_dir
@@ -231,7 +254,6 @@ def main():
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
     )
-    print(colored("response_template: ", "cyan"), response_template)
     trainer = SFTTrainer(
         args=config,
         model=peft_model,

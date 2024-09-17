@@ -128,7 +128,7 @@ def main():
         print('\t', "SBERT Sim.", metrics[name]["sbert_similarity"][0])
 
     df = pd.DataFrame.from_dict(metrics, orient="index")
-    # df.to_json("results.json", orient="index")
+    df.to_json("results.json", orient="index")
 
 if __name__ == "__main__":
     sys.exit(main())
