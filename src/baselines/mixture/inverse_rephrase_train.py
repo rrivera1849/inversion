@@ -44,7 +44,7 @@ parser.add_argument("--logging_steps", type=int, default=100,
                     help="Number of steps to log the training metrics.")
 parser.add_argument("--per_device_train_batch_size", type=int, default=16,
                     help="Batch size per device.")
-parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
+parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
                     help="Number of gradient accumulation steps.")
 parser.add_argument("--neftune", default=False, action="store_true",
                     help="Whether to use the NEFT-Tune.")
@@ -205,14 +205,14 @@ def get_experiment_dir() -> str:
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
     if args.with_cluster_id:
         experiment_dir += "_cluster_id"
+    if args.neftune:
+        experiment_dir += f"_neftune={args.neftune_alpha}"
     experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
     os.makedirs(experiment_dir, exist_ok=True)
     return experiment_dir
 
 def get_run_name() -> str:
     run_name = f"r={args.lora_r}_alpha={args.lora_alpha}_dropout={args.lora_dropout}_perc={args.perc}_perc-gold-labels={args.perc_gold_labels}"
-    if args.neftune:
-        run_name += f"_neftune-alpha={args.neftune_alpha}"
     return run_name
 
 def save_hparams(experiment_dir: str, run_name: str) -> None:
@@ -230,6 +230,8 @@ def save_hparams(experiment_dir: str, run_name: str) -> None:
         lora_dropout=args.lora_dropout,
         prompt_type=args.prompt_type,
         perc_gold_labels=args.perc_gold_labels,
+        neftune=args.neftune,
+        neftune_alpha=args.neftune_alpha,
     )
     os.makedirs(os.path.join(experiment_dir, run_name), exist_ok=True)
     with open(os.path.join(experiment_dir, run_name, "hparams.json"), "w") as fout:
@@ -266,7 +268,6 @@ def main():
         max_seq_length=get_max_seq_length(),
         report_to="tensorboard",
         output_dir=os.path.join(experiment_dir, run_name),
-        run_name=run_name,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         gradient_checkpointing=True,
@@ -287,15 +288,13 @@ def main():
         args=config,
         model=model,
         train_dataset=train_samples,
+        eval_dataset=test_samples,
         data_collator=DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer),
         formatting_func=formatting_func,
     )
-    
     trainer.train(
         resume_from_checkpoint=args.resume_from_checkpoint,
     )
-    # test_metrics = trainer.evaluate(test_samples)
-    # print(test_metrics)
 
 if __name__ == "__main__":
     assert args.perc > 0.0 and args.perc <= 1.0
