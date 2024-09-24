@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from model import MixturePredictor
 
-def load_mixture_predictor(path: str):
+def load_mixture_predictor(path: str) -> MixturePredictor:
     model = MixturePredictor()
     accelerator = Accelerator()
     model = accelerator.prepare(model)
