@@ -46,10 +46,6 @@ parser.add_argument("--per_device_train_batch_size", type=int, default=16,
                     help="Batch size per device.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
                     help="Number of gradient accumulation steps.")
-parser.add_argument("--neftune", default=False, action="store_true",
-                    help="Whether to use the NEFT-Tune.")
-parser.add_argument("--neftune_alpha", type=float, default=5.,
-                    help="NEFT-Tune alpha parameter.")
 parser.add_argument("--perc", type=float, default=1.0,
                     help="Percentage of the training dataset to use.")
 
@@ -205,8 +201,6 @@ def get_experiment_dir() -> str:
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
     if args.with_cluster_id:
         experiment_dir += "_cluster_id"
-    if args.neftune:
-        experiment_dir += f"_neftune={args.neftune_alpha}"
     experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
     os.makedirs(experiment_dir, exist_ok=True)
     return experiment_dir
@@ -230,8 +224,6 @@ def save_hparams(experiment_dir: str, run_name: str) -> None:
         lora_dropout=args.lora_dropout,
         prompt_type=args.prompt_type,
         perc_gold_labels=args.perc_gold_labels,
-        neftune=args.neftune,
-        neftune_alpha=args.neftune_alpha,
     )
     os.makedirs(os.path.join(experiment_dir, run_name), exist_ok=True)
     with open(os.path.join(experiment_dir, run_name, "hparams.json"), "w") as fout:
@@ -259,11 +251,6 @@ def main():
     save_steps = 10 if args.debug else args.save_steps
     logging_steps = 1 if args.debug else args.logging_steps
 
-    if args.neftune:
-        kwargs = {"neftune_noise_alpha": args.neftune_alpha}
-    else:
-        kwargs = {}
-
     config = SFTConfig(
         max_seq_length=get_max_seq_length(),
         report_to="tensorboard",
@@ -282,7 +269,6 @@ def main():
         # https://discuss.huggingface.co/t/training-llama-with-lora-on-multiple-gpus-may-exist-bug/47005/3
         ddp_find_unused_parameters=False,
         gradient_checkpointing_kwargs={"use_reentrant" : False},
-        **kwargs,
     )
     trainer = SFTTrainer(
         args=config,
