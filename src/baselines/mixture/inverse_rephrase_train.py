@@ -7,13 +7,14 @@ from argparse import ArgumentParser
 from collections import OrderedDict
 
 import torch
+import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from termcolor import colored
 from transformers import (
     AutoModelForCausalLM, 
-    AutoTokenizer, 
+    AutoTokenizer,
 )
 from trl import (
     SFTConfig, 
@@ -22,7 +23,10 @@ from trl import (
     set_seed
 )
 
+from embedding_utils import get_luar_instance_embeddings, load_luar_model_and_tokenizer
 from utils import build_inverse_prompt
+
+torch.autograd.set_detect_anomaly(True)
 
 set_seed(43)
 OUTPUT_DIR = "/data1/yubnub/changepoint/models/inverse"
@@ -60,8 +64,8 @@ parser.add_argument("--lora_dropout", type=float, default=0.1,
 parser.add_argument("--prompt_type", type=str, default="none",
                     choices=["none", "tokens", "probs", "logprobs"],
                     help="Type of prompt to use for conditioning the generation.")
-parser.add_argument("--with_cluster_id", default=False, action="store_true",
-                    help="Whether to use the cluster_id for conditioning the generation.")
+parser.add_argument("--targetted", default=False, action="store_true",
+                    help="Will use a Style Embedding to condition the generation.")
 
 parser.add_argument("--perc_gold_labels", type=float, default=0.5, 
                     help="Percentage of gold labels to use for conditioning the generation.")
@@ -78,9 +82,13 @@ def get_max_seq_length():
         return 1024
     else:
         return 2048
+    
+def get_device_string():
+    device_string = PartialState().process_index 
+    return device_string
 
 def load_model_and_tokenizer():
-    device_string = PartialState().process_index 
+    device_string = get_device_string()
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, 
         device_map={'':device_string},
@@ -99,12 +107,19 @@ def load_model_and_tokenizer():
         bias="none", # keeps the original model perform equally when the adapter is not used
     )
     model = get_peft_model(model, peft_config)
+
+    # If we do this before, PEFT will add a LORA layer to the style_embedding_proj
+    if args.targetted:
+        model.style_embedding_proj = nn.Linear(512, model.config.hidden_size)
+        model.original_save_pretrained = model.save_pretrained
+        model.save_pretrained = custom_save_pretrained.__get__(model)
+
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_NAME,
-        padding_side="left",
+        padding_side="right" if args.targetted else "left",
         add_eos_token=True,
     )
-        
+
     tokenizer.pad_token = tokenizer.eos_token
     return model, tokenizer
 
@@ -140,28 +155,36 @@ def load_dataset() -> tuple[list[str, list[str]]]:
             if N is not None and i >= N:
                 break
             
-    if args.with_cluster_id:
-        mapping = json.loads(open(os.path.join(args.dataset_path, "author_id_to_cluster_center.json")).read())
-        for data in train_data:
-            data["cluster_id"] = mapping[data["author_id"]]
-        for data in valid_data:
-            data["cluster_id"] = mapping[data["author_id"]]
-
     train_data = Dataset.from_list(train_data)
     valid_data = Dataset.from_list(valid_data)
+
+    if args.targetted:
+        # get the style embeddings for the training and validation data
+        luar, luar_tok = load_luar_model_and_tokenizer()
+        key = "unit"
+        if torch.cuda.is_available():
+            device = torch.device("cuda:{}".format(get_device_string()))
+            luar.to(device)
+
+        print(colored("Computing style embeddings for training data", "green"))
+        train_embeddings = get_luar_instance_embeddings(
+            train_data[key], luar, luar_tok, progress_bar=True, batch_size=1024,
+        ).cpu().tolist()
+        train_data = train_data.add_column("style_embedding", train_embeddings)
+
+        print(colored("Computing style embeddings for validation data", "green"))
+        valid_embeddings = get_luar_instance_embeddings(
+            valid_data[key], luar, luar_tok, progress_bar=True, batch_size=1024,
+        ).cpu().tolist()
+        valid_data = valid_data.add_column("style_embedding", valid_embeddings)
+    
     return train_data, valid_data
 
-def get_valid_key(keys: list[str], valid_names: list[str]) -> str:
-    for key in keys:
-        if key in valid_names:
-            return key
-    assert False
-    
 def formatting_func(example: Dataset) -> list[str]:
     """Builds the inverse prompt for the generation task.
     """
-    genkey = get_valid_key(example, ["generation", "rephrase"])
-    origkey = get_valid_key(example, ["original", "unit"])
+    genkey = "rephrase"
+    origkey = "unit"
 
     texts = []
     for i in range(len(example[genkey])):
@@ -172,13 +195,11 @@ def formatting_func(example: Dataset) -> list[str]:
                 example["mixture_tokens"][i], 
                 example["mixture_probs"][i], 
                 prompt_type=args.prompt_type,
-                cluster_id=example["cluster_id"][i] if args.with_cluster_id else None,
             )
         else:
             text = build_inverse_prompt(
                 example[genkey][i], 
                 example[origkey][i],
-                cluster_id=example["cluster_id"][i] if args.with_cluster_id else None,
             )
         texts.append(text)
         
@@ -199,8 +220,10 @@ def mix_gold_labels(
 def get_experiment_dir() -> str:
     dataset_name = os.path.basename(args.dataset_path)
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
-    if args.with_cluster_id:
-        experiment_dir += "_cluster_id"
+    if args.targetted:
+        experiment_dir += "_targetted"
+    if args.debug:
+        experiment_dir += "_debug"
     experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
     os.makedirs(experiment_dir, exist_ok=True)
     return experiment_dir
@@ -228,7 +251,54 @@ def save_hparams(experiment_dir: str, run_name: str) -> None:
     os.makedirs(os.path.join(experiment_dir, run_name), exist_ok=True)
     with open(os.path.join(experiment_dir, run_name, "hparams.json"), "w") as fout:
         json.dump(hparams, fout, indent=4)
+        
+class DataCollatorWithStyleEmbeddings(DataCollatorForCompletionOnlyLM):
+    def __init__(self, emb, style_emb_proj, response_template, tokenizer):
+        super().__init__(response_template=response_template, tokenizer=tokenizer)
+        self.emb = emb
+        self.style_emb_proj = style_emb_proj
+        process_index = get_device_string()
+        self.device = torch.device("cuda:{}".format(process_index))
+        
+    def __call__(self, examples):
+        examples = Dataset.from_list(examples)
 
+        # format -> tokenize -> collate with DataCollatorForCompletionOnlyLM
+        outputs = formatting_func(examples)
+        outputs = [self.tokenizer(ex) for ex in outputs]
+        outputs = super().__call__(outputs)
+        outputs = outputs.to(self.device)
+
+        B = outputs["labels"].size(0)
+        # 1. Get the Mistral embeddings:
+        outputs["inputs_embeds"] = self.emb(outputs["input_ids"]).detach()
+        outputs["inputs_embeds"].requires_grad = True
+        # 2. Project style embeddings to Mistral space:
+        style_embeddings = torch.tensor(examples["style_embedding"]).to(self.device)
+        style_embeddings = self.style_emb_proj(style_embeddings).unsqueeze(1)
+        # 3. Input = [style_embedding || embeds]
+        outputs["inputs_embeds"] = torch.cat((style_embeddings, outputs["inputs_embeds"]), dim=1)
+
+        # 5. Shift the labels to the right to account for the style embedding:
+        new_label = torch.zeros(B, 1, dtype=torch.long).fill_(-100).to(self.device)
+        outputs["labels"] = torch.cat((new_label, outputs["labels"]), dim=1)
+
+        # 6. Add one extra element to the attention mask:
+        outputs["attention_mask"] = torch.cat(
+            (torch.ones(B, 1, dtype=torch.long).to(self.device), outputs["attention_mask"]),
+            dim=1,
+        )
+
+        outputs.pop("input_ids")
+        return outputs
+    
+def custom_save_pretrained(self, *args, **kwargs):
+    """Saves the style_embedding_proj layer, along with the rest of the model.
+    """
+    path = args[0]
+    torch.save(self.style_embedding_proj.state_dict(), os.path.join(path, "style_embedding_proj.pt"))
+    self.original_save_pretrained(*args, **kwargs)
+    
 def main():
     if args.debug:
         print(colored("Running in DEBUG mode", "green"))
@@ -270,13 +340,35 @@ def main():
         ddp_find_unused_parameters=False,
         gradient_checkpointing_kwargs={"use_reentrant" : False},
     )
+    
+    if args.targetted:
+        config.dataset_kwargs = {"skip_prepare_dataset": True}
+        config.remove_unused_columns = False
+        config.dataset_text_field = ""
+        config.dataloader_pin_memory = False
+        form_fn = None
+        
+        collator = DataCollatorWithStyleEmbeddings(
+            emb=model.get_input_embeddings(),
+            style_emb_proj=model.style_embedding_proj,
+            response_template=response_template, 
+            tokenizer=tokenizer
+        )
+    else:
+        collator = DataCollatorForCompletionOnlyLM(
+            response_template=response_template, 
+            tokenizer=tokenizer
+        )
+        form_fn = formatting_func
+    
     trainer = SFTTrainer(
         args=config,
         model=model,
         train_dataset=train_samples,
         eval_dataset=test_samples,
-        data_collator=DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer),
-        formatting_func=formatting_func,
+        data_collator=collator,
+        formatting_func=form_fn,
+        
     )
     trainer.train(
         resume_from_checkpoint=args.resume_from_checkpoint,
