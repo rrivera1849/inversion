@@ -43,9 +43,6 @@ parser.add_argument("--num_generations", type=int, default=1)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
-if args.num_generations > 1:
-    assert args.vllm, "Multiple generations only supported with VLLM."
-
 DEBUG = args.debug
 
 BATCH_SIZE = args.batch_size
@@ -74,7 +71,7 @@ def create_output_file(
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl" 
-    output_fname += f".vllm_n={args.num_generations}" if args.vllm else ""
+    output_fname += f".vllm_n={args.num_generations}" if args.vllm else f"n={args.num_generations}"
     output_fname += ".debug" if DEBUG else ""
     output_fout = open(output_fname, "w+")
     print(f"Writing to {output_fname}")
@@ -184,25 +181,30 @@ def get_HF_generations(
     tokenized_text = inverse_tokenizer(
             prompt_text,
             return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=3072,
+            padding=True,
         ).to("cuda")
-    generations = inverse_model.generate(
-            **tokenized_text,
-            generation_config=generation_config,
-        )
-    generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
 
-    outputs = []
-    for j, gen in enumerate(generations):
-        gen = gen[gen.index("Output: ")+len("Output: "):]
-        if "\n#####\n" in gen:
-            gen = gen[:gen.index("\n#####\n")]
-        else:
-            gen = get_best_sentence_substring(gen, text[j])
-        outputs.append(gen)
+    all_generations = []
+    for _ in range(args.num_generations):
+        generations = inverse_model.generate(
+                **tokenized_text,
+                generation_config=generation_config,
+            )
+        generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
+        all_generations.append(generations)
 
+    outputs = [[] for _ in range(len(prompt_text))]
+    for j in range(len(prompt_text)):
+        sample_generations = [all_generations[k][j] for k in range(args.num_generations)]
+        for gen in sample_generations:
+            gen = gen[gen.index("Output: ")+len("Output: "):]
+            if "\n#####\n" in gen:
+                gen = gen[:gen.index("\n#####\n")]
+            else:
+                gen = get_best_sentence_substring(gen, text[j])
+            outputs[j].append(gen)
+
+    outputs = [list(set(o)) for o in outputs]
     return outputs
 
 def get_VLLM_generations(
@@ -264,7 +266,7 @@ def main():
             output_fout.flush()
 
         if DEBUG:
-            import pdb; pdb.set_trace()
+            # import pdb; pdb.set_trace()
             break
 
     return 0
