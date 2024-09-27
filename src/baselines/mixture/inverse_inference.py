@@ -5,8 +5,11 @@ import sys
 from argparse import ArgumentParser
 from typing import Union
 
+import pandas as pd
 import spacy
 import torch
+import torch.nn as nn
+from termcolor import colored
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
@@ -19,6 +22,7 @@ from vllm import (
     SamplingParams,
 )
 
+from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
     build_inverse_prompt, 
     get_mixture_weights, 
@@ -30,7 +34,7 @@ set_seed(43)
 parser = ArgumentParser()
 parser.add_argument("--dataset_name", type=str, 
                     default="data.jsonl.filtered.cleaned_kmeans_100")
-parser.add_argument("--filename", type=str, default="test.jsonl")
+parser.add_argument("--filename", type=str, default="test.small.jsonl")
 parser.add_argument("--prompt_type", type=str, default="none")
 parser.add_argument("--mixture_predictor_path", type=str, default=None,
                     help="Path to the mixture predictor model.")
@@ -40,8 +44,14 @@ parser.add_argument("--top_p", type=float, default=0.9)
 parser.add_argument("--batch_size", type=int, default=20)
 parser.add_argument("--vllm", default=False, action="store_true")
 parser.add_argument("--num_generations", type=int, default=1)
-parser.add_argument("--debug", action="store_true")
+parser.add_argument("--with_style_embeddings", default=False, action="store_true")
+parser.add_argument("--targetted_mode", type=str, default="author",
+                    choices=["author", "plagiarism"])
+parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
+
+if args.with_style_embeddings:
+    assert not args.vllm, "VLLM does not support `inputs_embeds`"
 
 DEBUG = args.debug
 
@@ -53,12 +63,6 @@ PROMPTING_DATA_PATH = os.path.join(DATA_PATH, args.dataset_name, "inverse_output
 os.makedirs(PROMPTING_DATA_PATH, exist_ok=True)
 
 INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
-INVERSE_MODELS = {
-    "none": "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.5",
-    "tokens": "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.0",
-    "probs": "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.0",
-}
-assert args.prompt_type in INVERSE_MODELS
 NLP = spacy.load("en_core_web_sm")
 
 def create_output_file(
@@ -72,10 +76,19 @@ def create_output_file(
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl" 
     output_fname += f".vllm_n={args.num_generations}" if args.vllm else f"n={args.num_generations}"
+    if "targetted" in args.prompt_type:
+        output_fname += f".targetted_mode={args.targetted_mode}"
     output_fname += ".debug" if DEBUG else ""
-    output_fout = open(output_fname, "w+")
-    print(f"Writing to {output_fname}")
-    return output_fout
+    
+    if os.path.exists(output_fname):
+        output_fout = open(output_fname, "a+")
+        last_line_num = sum(1 for line in open(output_fname))
+    else:
+        output_fout = open(output_fname, "w+")
+        last_line_num = 0
+        
+    print(f"Writing to {output_fname}, last line number: {last_line_num}")
+    return output_fout, last_line_num
 
 def load_inverse_model(
     prompt_type: str = "none",
@@ -83,12 +96,11 @@ def load_inverse_model(
 ) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
     """Loads our inversion model, either with or without Mixture Weights in the prompt.
     """
-    inverse_model = INVERSE_MODELS[prompt_type]
     checkpoint_path = os.path.join(
         INVERSE_SAVEPATH, 
         args.dataset_name, 
-        args.prompt_type, 
-        inverse_model, 
+        prompt_type, 
+        "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.5", 
         f"checkpoint-{args.num}"
     )
     
@@ -116,6 +128,26 @@ def load_inverse_model(
 
         return inverse_model, inverse_tokenizer
 
+def load_style_embedding_projection(
+    prompt_type: str = "none",
+) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
+    """Loads our inversion model, either with or without Mixture Weights in the prompt.
+    """
+    checkpoint_path = os.path.join(
+        INVERSE_SAVEPATH, 
+        args.dataset_name, 
+        prompt_type, 
+        "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.5", 
+        f"checkpoint-{args.num}",
+        "style_embedding_proj.pt"
+    )
+    state_dict = torch.load(checkpoint_path)
+    style_embedding_proj = nn.Linear(512, 4096)
+    style_embedding_proj.load_state_dict(state_dict, strict=True)
+    style_embedding_proj.to("cuda")
+    style_embedding_proj.eval()
+    return style_embedding_proj
+
 def load_prompting_data(
 ):
     """Loads the Prompting Data.
@@ -130,7 +162,7 @@ def get_prompt_text(
 ) -> list[str]:
     """Generates the prompt text for the inverse model.
     """
-    if args.prompt_type != "none":
+    if "none" not in args.prompt_type:
         mixture_probs = get_mixture_weights(
                 mixture_predictor,
                 text,
@@ -163,12 +195,54 @@ def get_best_sentence_substring(
     min_idx = length_difference.index(min(length_difference))
     return substrings[min_idx].strip()
 
+def get_input_embeds(
+    prompt_text: list[str], 
+    inverse_model: AutoModelForCausalLM, 
+    style_embeddings: torch.Tensor, 
+    embedding_indices: list[int], 
+    tokenized_text: dict,
+):
+    """Embeds the input using Mistral, and concatenates the target style embedding.
+    """
+    # 1. Get the Mistral embeddings for the input:
+    emb = inverse_model.get_input_embeddings()
+    inputs_embeds = emb(tokenized_text["input_ids"])
+
+    # 2. Find the indices of the <s> tokens:
+    indices = torch.where(tokenized_text["input_ids"] == 1)[1]
+    new_inputs_embeds = []
+    for j, idx in enumerate(indices):
+        idx = idx.item()
+        # New input concatenates the style embedding before the <s> token:
+        new_inputs_embeds.append(torch.cat(
+                (inputs_embeds[j:j+1, :idx], 
+                 style_embeddings[embedding_indices[j]:embedding_indices[j]+1], 
+                 inputs_embeds[j:j+1, idx:]),
+                dim=1,
+            ))
+    new_inputs_embeds = torch.cat(new_inputs_embeds, dim=0)
+    tokenized_text["inputs_embeds"] = new_inputs_embeds
+
+    # 3. Add a "1" to the attention mask for the style embedding, to account for the new token:
+    tokenized_text["attention_mask"] = torch.cat(
+            (tokenized_text["attention_mask"],
+             torch.ones(len(prompt_text), 1, dtype=torch.long).to(inverse_model.device)), 
+            dim=1,
+        )
+    
+    # 4. Remove the input_ids, as we are using inputs_embeds:
+    tokenized_text.pop("input_ids")
+    return tokenized_text
+
+@torch.no_grad()
 def get_HF_generations(
     prompt_text: list[str],
     text: list[str],
     inverse_model: AutoModelForCausalLM,
     inverse_tokenizer: AutoTokenizer,
     generation_args: dict,
+    style_embeddings: torch.Tensor = None,
+    embedding_indices: list[int] = None,
 ) -> list[str]:
     """Generates the inverse text using a HuggingFace model.
     """
@@ -183,9 +257,19 @@ def get_HF_generations(
             return_tensors="pt",
             padding=True,
         ).to("cuda")
+    
+    if style_embeddings is not None:
+        assert embedding_indices is not None
+        tokenized_text = get_input_embeds(
+            prompt_text, 
+            inverse_model, 
+            style_embeddings, 
+            embedding_indices, 
+            tokenized_text
+        )
 
     all_generations = []
-    for _ in range(args.num_generations):
+    for _ in tqdm(range(args.num_generations)):
         generations = inverse_model.generate(
                 **tokenized_text,
                 generation_config=generation_config,
@@ -197,7 +281,10 @@ def get_HF_generations(
     for j in range(len(prompt_text)):
         sample_generations = [all_generations[k][j] for k in range(args.num_generations)]
         for gen in sample_generations:
-            gen = gen[gen.index("Output: ")+len("Output: "):]
+            if "targetted" not in args.prompt_type:
+                # When providing input embeddings, we only get the output
+                gen = gen[gen.index("Output: ")+len("Output: "):]
+
             if "\n#####\n" in gen:
                 gen = gen[:gen.index("\n#####\n")]
             else:
@@ -224,24 +311,94 @@ def get_VLLM_generations(
     outputs = [list(set([o.text for o in out.outputs])) for out in outputs]
     return outputs
 
+def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
+    """Converts the data to targetted mode for Plagiarism or Authorship ID.
+    """
+    data = pd.merge(data, data, how="cross")
+
+    if targetted_mode == "author":
+        for col in data.columns:
+            if "author_id" in col:
+                continue
+            if col.endswith("_x"):
+                data[col] = data[col].apply(lambda x: x[:len(x)//2])
+            else:
+                data[col] = data[col].apply(lambda x: x[len(x)//2:])
+    
+    to_explode = [col for col in data.columns if col.endswith("_x") and "author_id" not in col]
+    data = data.explode(to_explode)
+    return data
+
+def get_num_expected_rows(data: pd.DataFrame, targetted_mode: str):
+    if targetted_mode == "author":
+        num_expected = data["rephrase"].apply(lambda x: len(x) // 2).sum() * 100
+    else:
+        num_expected = data["rephrase"].apply(lambda x: len(x)).sum() * 100
+    return num_expected
+
 def main():
     mixture_predictor = None
-    if args.prompt_type != "none":
+    if "none" not in args.prompt_type:
         mixture_predictor = load_mixture_predictor(args.mixture_predictor_path)
 
     data = load_prompting_data()
+
+    if args.with_style_embeddings:
+        print(colored("Calculating Style Embeddings", "green"))
+        print(colored("\tAssuming Targetted Mode!", "yellow"))
+        
+        # 1. When working with a targetted model, we need to pair up 
+        # the samples into (source, target) pairs:
+        data = pd.DataFrame(data)
+        data = data.groupby("author_id").agg(list).reset_index()
+        num_expected = get_num_expected_rows(data, args.targetted_mode)
+        data = convert_to_targetted_mode(data, args.targetted_mode)
+        assert len(data) == num_expected
+        
+        # 2. There are only `num_authors` unique targets:
+        mapping = {}
+        target_text = []
+        authors = data.author_id_y.unique()
+        for j, author in enumerate(authors):
+            mapping[author] = j
+            target = data[data.author_id_y == author].iloc[0]["unit_y"]
+            target_text.append(target)
+
+        # 3. Embed the target text using the LUAR model, and project it to the
+        #    Mistral embedding space
+        style_embedding_projector = load_style_embedding_projection(args.prompt_type)
+        luar, luar_tok = load_luar_model_and_tokenizer()
+        luar.to("cuda")
+        style_embeddings = [get_luar_author_embeddings(target, luar, luar_tok) for target in target_text]
+        style_embeddings = torch.cat(style_embeddings, dim=0)
+        style_embeddings = style_embedding_projector(style_embeddings)
+        style_embeddings = style_embeddings.unsqueeze(1)
+        style_embeddings = style_embeddings.to(torch.bfloat16)
+
+        # 4. Map the targetted samples to their respective style embeddings:
+        data["embedding_idx"] = data.author_id_y.map(mapping)
+        data = data.to_dict(orient="records")
+    else:
+        style_embeddings = None
+
     inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type, args.vllm)
 
     generation_args = {
         "temperature": args.temperature,
         "top_p": args.top_p,
     }
-    output_fout = create_output_file(generation_args)
+    output_fout, last_line_num = create_output_file(generation_args)
 
-    for batch_idx in tqdm(range(0, len(data), BATCH_SIZE)):
+    for batch_idx in tqdm(range(last_line_num, len(data), BATCH_SIZE)):
         batch = data[batch_idx:batch_idx+BATCH_SIZE]
-        text = [b["rephrase"] for b in batch]
+        key = "rephrase_x" if args.with_style_embeddings else "rephrase"
+        text = [b[key] for b in batch]
         prompt_text = get_prompt_text(text, mixture_predictor)
+        
+        if args.with_style_embeddings:
+            embedding_indices = [b["embedding_idx"] for b in batch]
+        else:
+            embedding_indices = None
 
         if args.vllm:
             outputs = get_VLLM_generations(
@@ -255,7 +412,9 @@ def main():
                 text,
                 inverse_model, 
                 inverse_tokenizer, 
-                generation_args, 
+                generation_args,
+                style_embeddings,
+                embedding_indices,
             )
 
         for j in range(len(outputs)):
