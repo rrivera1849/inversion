@@ -239,10 +239,10 @@ def calculate_metric(
     assert len(inverse_author_embeddings) == num_author
     for simtype in ["expected", "max"]:
         similarities = pairwise_similarity(query_author_embeddings, inverse_instance_embeddings, type=simtype)
-        metrics[f"EER_inverse-{simtype}_author_instance"] = calculate_EER(author_instance_labels, similarities)
+        metrics[f"EER_inverse-{simtype}_author-instance"] = calculate_EER(author_instance_labels, similarities)
         
         similarities = pairwise_similarity(query_author_embeddings, inverse_author_embeddings, type=simtype)
-        metrics[f"EER_inverse-{simtype}_author_author"] = calculate_EER(author_author_labels, similarities)
+        metrics[f"EER_inverse-{simtype}_author-author"] = calculate_EER(author_author_labels, similarities)
 
         if mode == "plagiarism":
             similarities = pairwise_similarity(query_instance_embeddings, inverse_instance_embeddings, type=simtype)
