@@ -80,9 +80,7 @@ MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 
 def get_max_seq_length():
     if args.prompt_type == "none":
-        return 512
-    elif args.prompt_type == "none" and args.targetted_mode == "examples":
-        return 2048
+        return 2048 if args.targetted_mode == "examples" else 512
     elif args.prompt_type == "tokens":
         return 1024
     else:
