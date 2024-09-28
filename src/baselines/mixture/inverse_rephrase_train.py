@@ -3,9 +3,11 @@ import json
 import os
 import random
 import sys
+from math import ceil
 from argparse import ArgumentParser
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 
+import numpy as np
 import torch
 import torch.nn as nn
 from accelerate import PartialState
@@ -64,7 +66,8 @@ parser.add_argument("--lora_dropout", type=float, default=0.1,
 parser.add_argument("--prompt_type", type=str, default="none",
                     choices=["none", "tokens", "probs", "logprobs"],
                     help="Type of prompt to use for conditioning the generation.")
-parser.add_argument("--targetted", default=False, action="store_true",
+parser.add_argument("--targetted_mode", type=str, default=None,
+                    choices=["embeddings", "examples"],
                     help="Will use a Style Embedding to condition the generation.")
 
 parser.add_argument("--perc_gold_labels", type=float, default=0.5, 
@@ -78,6 +81,8 @@ MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 def get_max_seq_length():
     if args.prompt_type == "none":
         return 512
+    elif args.prompt_type == "none" and args.targetted_mode == "examples":
+        return 2048
     elif args.prompt_type == "tokens":
         return 1024
     else:
@@ -109,14 +114,14 @@ def load_model_and_tokenizer():
     model = get_peft_model(model, peft_config)
 
     # If we do this before, PEFT will add a LORA layer to the style_embedding_proj
-    if args.targetted:
+    if args.targetted_mode == "embeddings":
         model.style_embedding_proj = nn.Linear(512, model.config.hidden_size)
         model.original_save_pretrained = model.save_pretrained
         model.save_pretrained = custom_save_pretrained.__get__(model)
 
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_NAME,
-        padding_side="right" if args.targetted else "left",
+        padding_side="right" if args.targetted_mode == "embeddings" else "left",
         add_eos_token=True,
     )
 
@@ -130,10 +135,12 @@ def load_dataset() -> tuple[list[str, list[str]]]:
     i = 0
     fname = "train.jsonl"
     fname += ".mixture" if args.prompt_type != "none" else ""
+    train_author_to_idx = defaultdict(list)
     with open(os.path.join(args.dataset_path, fname), "r") as fin:
         for line in fin:
             data = json.loads(line)
             train_data.append(data)
+            train_author_to_idx[data["author_id"]].append(i)
             i += 1
             if i % 10_000 == 0:
                 print(colored(f"Loaded {i} training samples", "yellow"))
@@ -145,20 +152,36 @@ def load_dataset() -> tuple[list[str, list[str]]]:
     i = 0
     fname = "valid.jsonl"
     fname += ".mixture" if args.prompt_type != "none" else ""
+    valid_author_to_idx = defaultdict(list)
     with open(os.path.join(args.dataset_path, fname), "r") as fin:
         for line in fin:
             data = json.loads(line)
             valid_data.append(data)
+            valid_author_to_idx[data["author_id"]].append(i)
             i += 1
             if i % 10_000 == 0:
                 print(colored(f"Loaded {i} validation samples", "yellow"))
             if N is not None and i >= N:
                 break
             
+    if args.targetted_mode == "examples":
+        for author, indices in train_author_to_idx.items():
+            # multiple Rephrase -> Unit mappings:
+            all_author_examples = set([train_data[idx]["unit"] for idx in indices])
+            for i in range(len(indices)):
+                current_unit = train_data[indices[i]]["unit"]
+                train_data[indices[i]]["examples"] = [example for example in all_author_examples if example != current_unit]
+        for author, indices in valid_author_to_idx.items():
+            # multiple Rephrase -> Unit mappings:
+            all_author_examples = set([valid_data[idx]["unit"] for idx in indices])
+            for i in range(len(indices)):
+                current_unit = valid_data[indices[i]]["unit"]
+                valid_data[indices[i]]["examples"] = [example for example in all_author_examples if example != current_unit]
+            
     train_data = Dataset.from_list(train_data)
     valid_data = Dataset.from_list(valid_data)
 
-    if args.targetted:
+    if args.targetted_mode == "embeddings":
         # get the style embeddings for the training and validation data
         luar, luar_tok = load_luar_model_and_tokenizer()
         key = "unit"
@@ -196,6 +219,17 @@ def formatting_func(example: Dataset) -> list[str]:
                 example["mixture_probs"][i], 
                 prompt_type=args.prompt_type,
             )
+        elif args.targetted_mode == "examples":
+            examples = example["examples"][i]
+            num_examples = ceil(np.random.beta(2, 1) * 10)
+            num_examples = max(1, min(num_examples, len(examples)))
+            examples = random.sample(examples, num_examples)
+            
+            text = build_inverse_prompt(
+                example[genkey][i], 
+                example[origkey][i],
+                examples=examples,
+            )
         else:
             text = build_inverse_prompt(
                 example[genkey][i], 
@@ -221,7 +255,7 @@ def get_experiment_dir() -> str:
     dataset_name = os.path.basename(args.dataset_path)
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
     if args.targetted:
-        experiment_dir += "_targetted"
+        experiment_dir += "_targetted={}".format(args.targetted_mode)
     if args.debug:
         experiment_dir += "_debug"
     experiment_dir = os.path.join(OUTPUT_DIR, experiment_dir)
@@ -308,6 +342,7 @@ def main():
     
     train_samples, test_samples = load_dataset()
     response_template = "[/INST]\n###Output:"
+    
     print(colored(f"len(train_samples)={len(train_samples)}", "yellow"))
     print(colored(f"len(test_samples)={len(test_samples)}", "yellow"))
 
@@ -341,7 +376,7 @@ def main():
         gradient_checkpointing_kwargs={"use_reentrant" : False},
     )
     
-    if args.targetted:
+    if args.targetted_mode == "embeddings":
         config.dataset_kwargs = {"skip_prepare_dataset": True}
         config.remove_unused_columns = False
         config.dataset_text_field = ""

@@ -65,8 +65,18 @@ def build_inverse_prompt(
     mixture_probs: list[tuple[int, int]] = None,
     prompt_type: str = "none",
     no_stop_tokens: bool = False,
+    examples: list[str] = None
 ) -> str:
+    if examples is not None:
+        seperator = "\n-----\n"
+        header = "Here are examples of the original author:\n"
+        for example in examples:
+            header += f"Example: {example}{seperator}"
+    else:
+        header = ""
+        
     base_instruction = "The following passage is a mix of human and machine text, recover the original human text:"
+
     if prompt_type == "tokens":
         tokens_to_keep = "Keep these tokens while rephrasing, Ġ is a single space: "
         added_tokens = False
@@ -97,9 +107,9 @@ def build_inverse_prompt(
 
     stop_tokens = "\n#####\n"
     if no_stop_tokens:
-        prompt = f"[INST] {instruction} {generation}[/INST]\n###Output: {original}"
+        prompt = f"[INST] {header}{instruction} {generation}[/INST]\n###Output: {original}"
     else:
-        prompt = f"[INST] {instruction} {generation}[/INST]\n###Output: {original}{stop_tokens}"
+        prompt = f"[INST] {header}{instruction} {generation}[/INST]\n###Output: {original}{stop_tokens}"
     return prompt
 
 def get_levenshtein_tags(
