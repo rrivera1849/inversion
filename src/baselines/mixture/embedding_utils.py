@@ -46,7 +46,7 @@ def get_luar_instance_embeddings(
     if progress_bar:
         iter = tqdm(range(0, len(text), batch_size))
     else:
-        iter = range(0, len(text), batch)
+        iter = range(0, len(text), batch_size)
 
     for i in iter:
         batch = text[i:i+batch_size]
