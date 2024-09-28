@@ -252,7 +252,7 @@ def mix_gold_labels(
 def get_experiment_dir() -> str:
     dataset_name = os.path.basename(args.dataset_path)
     experiment_dir = os.path.join(dataset_name, args.prompt_type)
-    if args.targetted:
+    if args.targetted_mode is not None:
         experiment_dir += "_targetted={}".format(args.targetted_mode)
     if args.debug:
         experiment_dir += "_debug"
