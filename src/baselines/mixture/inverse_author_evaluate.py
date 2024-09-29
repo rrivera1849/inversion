@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from sentence_transformers import util
-from sklearn.metrics import roc_curve
+from sklearn.metrics import roc_curve, roc_auc_score
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 
@@ -22,6 +22,7 @@ def read_data(path: str):
     df_test_full = df_test_full.explode(to_explode).reset_index()
     assert df_test_full.unit.tolist() == df.unit.tolist()
     author_ids = df_test_full.author_id.tolist()
+    
     df["author_id"] = author_ids
     df.drop_duplicates("unit", inplace=True)
     
@@ -75,11 +76,15 @@ def get_luar_instance_embeddings(
     all_outputs = F.normalize(all_outputs, p=2, dim=-1)
     return all_outputs
 
-def calculate_EER(labels, sims):
-    fpr, tpr, _ = roc_curve(labels, sims, pos_label=1)
+def calculate_metrics(labels, sims, suffix):
+    metrics = {}
+    fpr, tpr, thresholds = roc_curve(labels, sims, pos_label=1)
     fnr = 1 - tpr
-    EER = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
-    return EER
+    metrics[f"ROC_{suffix}"] = (fpr, tpr, thresholds)
+    metrics[f"AUC_{suffix}"] = roc_auc_score(labels, sims)
+    metrics[f"AUC(0.01)_{suffix}"] = roc_auc_score(labels, sims, max_fpr=0.01)
+    metrics[f"EER_{suffix}"] = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
+    return metrics
 
 def max_similarity(
     embeddings1: torch.Tensor,  
@@ -143,7 +148,7 @@ def pairwise_similarity(
             pbar.update(1)
     return similarities
 
-def calculate_metric(
+def calculate_all(
     path: str,
     mode: str = "plagiarism",
 ):
@@ -152,7 +157,7 @@ def calculate_metric(
     metrics = {}
     df = read_data(path)
     df = df.groupby("author_id").agg(list)
-    
+
     if mode == "plagiarism":
         # query = target
         # task: plagiarism detection
@@ -192,19 +197,18 @@ def calculate_metric(
     # Author-Instance:
     similarities = util.pytorch_cos_sim(query_author_embeddings, rephrase_instance_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics["EER_rephrase_author-instance"] = calculate_EER(author_instance_labels, similarities)
-
+    metrics.update(calculate_metrics(author_instance_labels, similarities, "rephrase_author-instance"))
 
     # Author-Author
     similarities = util.pytorch_cos_sim(query_author_embeddings, rephrase_author_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics["EER_rephrase_author-author"] = calculate_EER(author_author_labels, similarities)
+    metrics.update(calculate_metrics(author_author_labels, similarities, "rephrase_author-author"))
 
     if mode == "plagiarism":
         # Instance-Instance:
         similarities = util.pytorch_cos_sim(query_instance_embeddings, rephrase_instance_embeddings)
         similarities = similarities.cpu().flatten().tolist()
-        metrics["EER_rephrase_instance-instance"] = calculate_EER(instance_instance_labels, similarities)
+        metrics.update(calculate_metrics(instance_instance_labels, similarities, "rephrase_instance-instance"))
 
     ##### Inverse (All):
     inverse_all_author_embeddings = [get_luar_author_embeddings(flatten(inverses)) for inverses in tqdm(df.inverse.tolist())]
@@ -218,18 +222,18 @@ def calculate_metric(
     # Author-Instance:
     similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_all_instance_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics[f"EER_all_author-instance"] = calculate_EER(author_instance_labels, similarities)
+    metrics.update(calculate_metrics(author_instance_labels, similarities, "inverse_all_author-instance"))
     
     # Author-Author
     similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_all_author_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics[f"EER_all_author-author"] = calculate_EER(author_author_labels, similarities)
+    metrics.update(calculate_metrics(author_author_labels, similarities, "inverse_all_author-author"))
 
     if mode == "plagiarism":
         # Instance-Instance:
         similarities = util.pytorch_cos_sim(query_instance_embeddings, inverse_all_instance_embeddings)
         similarities = similarities.cpu().flatten().tolist()
-        metrics[f"EER_all_instance-instance"] = calculate_EER(instance_instance_labels, similarities)
+        metrics.update(calculate_metrics(instance_instance_labels, similarities, "inverse_all_instance-instance"))
     
     ##### Inverse (Individual Embedding):
     inverse_instance_embeddings = [[get_luar_instance_embeddings(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
@@ -239,14 +243,14 @@ def calculate_metric(
     assert len(inverse_author_embeddings) == num_author
     for simtype in ["expected", "max"]:
         similarities = pairwise_similarity(query_author_embeddings, inverse_instance_embeddings, type=simtype)
-        metrics[f"EER_inverse-{simtype}_author-instance"] = calculate_EER(author_instance_labels, similarities)
+        metrics.update(calculate_metrics(author_instance_labels, similarities, f"inverse-{simtype}_author-instance"))
         
         similarities = pairwise_similarity(query_author_embeddings, inverse_author_embeddings, type=simtype)
-        metrics[f"EER_inverse-{simtype}_author-author"] = calculate_EER(author_author_labels, similarities)
+        metrics.update(calculate_metrics(author_author_labels, similarities, f"inverse-{simtype}_author-author"))
 
         if mode == "plagiarism":
             similarities = pairwise_similarity(query_instance_embeddings, inverse_instance_embeddings, type=simtype)
-            metrics[f"EER_inverse-{simtype}_instance_instance"] = calculate_EER(instance_instance_labels, similarities)
+            metrics.update(calculate_metrics(instance_instance_labels, similarities, f"inverse-{simtype}_instance-instance"))
 
     ##### Inverse (Single Inversion):
     df["single_inversion"] = df.inverse.apply(lambda xx: [x[0] for x in xx])
@@ -260,43 +264,43 @@ def calculate_metric(
     # Author-Instance:
     similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_single_instance_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics[f"EER_single_author-instance"] = calculate_EER(author_instance_labels, similarities)
+    metrics.update(calculate_metrics(author_instance_labels, similarities, "inverse_single_author-instance"))
     
     # Author-Author
     similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_single_author_embeddings)
     similarities = similarities.cpu().flatten().tolist()
-    metrics[f"EER_single_author-author"] = calculate_EER(author_author_labels, similarities)
+    metrics.update(calculate_metrics(author_author_labels, similarities, "inverse_single_author-author"))
 
     if mode == "plagiarism":
         # Instance-Instance:
         similarities = util.pytorch_cos_sim(query_instance_embeddings, inverse_single_instance_embeddings)
         similarities = similarities.cpu().flatten().tolist()
-        metrics[f"EER_single_instance-instance"] = calculate_EER(instance_instance_labels, similarities)
+        metrics.update(calculate_metrics(instance_instance_labels, similarities, "inverse_single_instance-instance"))
 
     return metrics
 
-os.makedirs("./metrics", exist_ok=True)
-base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-files = [
-    "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
-    "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
-    "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
-]
-for file in files:
-    path = os.path.join(base_path, file)
-    metrics_plagiarism = calculate_metric(path)
-    metrics_author = calculate_metric(path, "author")
-    
-    print(f"File: {file}")
-    print("Plagiarism")
-    print(metrics_plagiarism)
-    print("Author")
-    print(metrics_author)
-    print()
-    
-    import pdb; pdb.set_trace()
-    name = file[:-len(".jsonl.vllm_n=100")]
-    with open(f"./metrics/{name}_plagiarism.json", "w") as f:
-        json.dump(metrics_plagiarism, f)
-    with open(f"./metrics/{name}_author.json", "w") as f:
-        json.dump(metrics_author, f)
+if __name__ == "__main__":
+    os.makedirs("./metrics", exist_ok=True)
+    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
+    files = [
+        "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
+    ]
+    for file in files:
+        path = os.path.join(base_path, file)
+        metrics_plagiarism = calculate_all(path)
+        metrics_author = calculate_all(path, "author")
+        
+        print(f"File: {file}")
+        print("Plagiarism")
+        print(metrics_plagiarism)
+        print("Author")
+        print(metrics_author)
+        print()
+        
+        name = file[:-len(".jsonl.vllm_n=100")]
+        with open(f"./metrics/{name}_plagiarism.json", "w") as f:
+            json.dump(metrics_plagiarism, f)
+        with open(f"./metrics/{name}_author.json", "w") as f:
+            json.dump(metrics_author, f)
