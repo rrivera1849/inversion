@@ -1,6 +1,7 @@
 
 import json
 import os
+import random
 import sys
 from argparse import ArgumentParser
 from typing import Union
@@ -24,7 +25,8 @@ from vllm import (
 
 from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
-    build_inverse_prompt, 
+    build_inverse_prompt,
+    clean_duplicate_units,
     get_mixture_weights, 
     load_mixture_predictor,
 )
@@ -45,7 +47,8 @@ parser.add_argument("--batch_size", type=int, default=20)
 parser.add_argument("--vllm", default=False, action="store_true")
 parser.add_argument("--num_generations", type=int, default=1)
 parser.add_argument("--with_style_embeddings", default=False, action="store_true")
-parser.add_argument("--targetted_mode", type=str, default="author",
+parser.add_argument("--with_examples", default=False, action="store_true")
+parser.add_argument("--targetted_mode", type=str, default=None,
                     choices=["author", "plagiarism"])
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
@@ -158,7 +161,8 @@ def load_prompting_data(
 
 def get_prompt_text(
     text: list[str],
-    mixture_predictor,
+    mixture_predictor = None,
+    examples: list[list[str]] = None,
 ) -> list[str]:
     """Generates the prompt text for the inverse model.
     """
@@ -175,6 +179,10 @@ def get_prompt_text(
                 build_inverse_prompt(sample, "", tokens, probs, prompt_type=args.prompt_type, no_stop_tokens=True)
                 for sample, tokens, probs in zip(text, mixture_tokens, mixture_probs)
             ]
+    elif examples is not None:
+        prompt_text = [
+            build_inverse_prompt(t, "", examples=e, no_stop_tokens=True) for t, e in zip(text, examples)
+        ]
     else:
         prompt_text = [
             build_inverse_prompt(t, "", no_stop_tokens=True) for t in text
@@ -324,7 +332,7 @@ def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
                 data[col] = data[col].apply(lambda x: x[:len(x)//2])
             else:
                 data[col] = data[col].apply(lambda x: x[len(x)//2:])
-    
+
     to_explode = [col for col in data.columns if col.endswith("_x") and "author_id" not in col]
     data = data.explode(to_explode)
     return data
@@ -336,26 +344,56 @@ def get_num_expected_rows(data: pd.DataFrame, targetted_mode: str):
         num_expected = data["rephrase"].apply(lambda x: len(x)).sum() * 100
     return num_expected
 
+def clean_duplicate_units(data: pd.DataFrame):
+    """Have to be careful when running authorship ID, as we need to remove the 
+       repeated units. 
+    """
+    def get_indices_of_repeated(lst: list):
+        seen = set()
+        indices = []
+        for j, elem in enumerate(lst):
+            if elem in seen:
+                indices.append(j)
+            seen.add(elem)
+        return indices
+    
+    def remove_repeated(row):
+        indices_to_remove = get_indices_of_repeated(row["unit"])
+        for key, value in row.items():
+            if isinstance(value, list):
+                row[key] = [v for j, v in enumerate(value) if j not in indices_to_remove]
+        return row
+    
+    data = data.apply(remove_repeated, axis=1)
+    return data
+
 def main():
+    if args.targetted_mode == "plagiarism":
+        raise NotImplementedError("Plagiarism mode is not supported yet.")
+    
     mixture_predictor = None
     if "none" not in args.prompt_type:
         mixture_predictor = load_mixture_predictor(args.mixture_predictor_path)
 
     data = load_prompting_data()
-
-    if args.with_style_embeddings:
-        print(colored("Calculating Style Embeddings", "green"))
-        print(colored("\tAssuming Targetted Mode!", "yellow"))
-        
-        # 1. When working with a targetted model, we need to pair up 
-        # the samples into (source, target) pairs:
+    
+    if args.targetted_mode is not None:
+        assert args.with_style_embeddings or args.with_examples, "Targetted mode requires either style embeddings or examples!"
+        print(colored("Targetted Mode", "yellow"))
+        random.shuffle(data)
         data = pd.DataFrame(data)
         data = data.groupby("author_id").agg(list).reset_index()
+        if args.targetted_mode == "author":
+            data = clean_duplicate_units(data)
         num_expected = get_num_expected_rows(data, args.targetted_mode)
         data = convert_to_targetted_mode(data, args.targetted_mode)
         assert len(data) == num_expected
+    
+    style_embeddings = None
+    if args.with_style_embeddings:
+        print(colored("Calculating Style Embeddings", "green"))
         
-        # 2. There are only `num_authors` unique targets:
+        # 1. There are only `num_authors` unique targets:
         mapping = {}
         target_text = []
         authors = data.author_id_y.unique()
@@ -364,7 +402,7 @@ def main():
             target = data[data.author_id_y == author].iloc[0]["unit_y"]
             target_text.append(target)
 
-        # 3. Embed the target text using the LUAR model, and project it to the
+        # 2. Embed the target text using the LUAR model, and project it to the
         #    Mistral embedding space
         style_embedding_projector = load_style_embedding_projection(args.prompt_type)
         luar, luar_tok = load_luar_model_and_tokenizer()
@@ -375,11 +413,11 @@ def main():
         style_embeddings = style_embeddings.unsqueeze(1)
         style_embeddings = style_embeddings.to(torch.bfloat16)
 
-        # 4. Map the targetted samples to their respective style embeddings:
+        # 3. Map the targetted samples to their respective style embeddings:
         data["embedding_idx"] = data.author_id_y.map(mapping)
         data = data.to_dict(orient="records")
-    else:
-        style_embeddings = None
+    elif args.with_examples:
+        data = data.to_dict(orient="records")
 
     inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type, args.vllm)
 
@@ -391,9 +429,13 @@ def main():
 
     for batch_idx in tqdm(range(last_line_num, len(data), BATCH_SIZE)):
         batch = data[batch_idx:batch_idx+BATCH_SIZE]
-        key = "rephrase_x" if args.with_style_embeddings else "rephrase"
+        key = "rephrase_x" if args.with_style_embeddings or args.with_examples else "rephrase"
         text = [b[key] for b in batch]
-        prompt_text = get_prompt_text(text, mixture_predictor)
+        if args.with_examples:
+            examples = [b["unit_y"] for b in batch]
+            prompt_text = get_prompt_text(text, examples=examples)
+        else:
+            prompt_text = get_prompt_text(text, mixture_predictor)
         
         if args.with_style_embeddings:
             embedding_indices = [b["embedding_idx"] for b in batch]
