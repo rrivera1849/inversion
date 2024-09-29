@@ -17,7 +17,8 @@ def get_luar_author_embeddings(
     text: list[str],
     luar: AutoModel,
     luar_tok: AutoTokenizer,
-):
+    normalize: bool = True,
+) -> torch.Tensor:
     # output: tensor of shape (1, 512)
     assert isinstance(text, list)
     inputs = luar_tok(
@@ -30,7 +31,8 @@ def get_luar_author_embeddings(
     inputs["input_ids"] = inputs["input_ids"].view(1, len(text), 512)
     inputs["attention_mask"] = inputs["attention_mask"].view(1, len(text), 512)
     outputs = luar(**inputs)
-    outputs = F.normalize(outputs, p=2, dim=-1)
+    if normalize:
+        outputs = F.normalize(outputs, p=2, dim=-1)
     return outputs
 
 @torch.no_grad()
@@ -40,7 +42,8 @@ def get_luar_instance_embeddings(
     luar_tok: AutoTokenizer,
     batch_size: int = 32,
     progress_bar: bool = False,
-):
+    normalize: bool = True,
+) -> torch.Tensor:
     # output: tensor of shape (len(text), 512)
     all_outputs = []
     if progress_bar:
@@ -62,5 +65,6 @@ def get_luar_instance_embeddings(
         outputs = luar(**inputs)
         all_outputs.append(outputs)
     all_outputs = torch.cat(all_outputs, dim=0)
-    all_outputs = F.normalize(all_outputs, p=2, dim=-1)
+    if normalize:
+        all_outputs = F.normalize(all_outputs, p=2, dim=-1)
     return all_outputs
