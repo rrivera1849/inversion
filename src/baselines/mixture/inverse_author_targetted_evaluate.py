@@ -1,114 +1,129 @@
 
+import json
 import os
+from functools import partial
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_curve
+import torch
 from tqdm.auto import tqdm
 tqdm.pandas()
 
-from embedding_utils import *
-from metric_utils import *
-from sentence_transformers import util
+from embedding_utils import (
+    load_cisr_model,
+    load_luar_model_and_tokenizer,
+    load_sbert_model,
+    get_author_embeddings,
+    get_instance_embeddings,
+)
+from metric_utils import calculate_similarities_and_metrics
 
-base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-files = [
-    "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author",
-    "none_targetted_6400_temperature=0.7_top_p=0.9.jsonln=5.targetted_mode=author",
-]
-
-def calculate_EER(labels, sims):
-    fpr, tpr, _ = roc_curve(labels, sims, pos_label=1)
-    fnr = 1 - tpr
-    EER = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
-    return EER
-
-def flatten(lst):
+def flatten(lst: list[list[Any]]) -> list[Any]:
     return [item for sublist in lst for item in sublist]
 
-def get_unique(df, author_key="author_y", textkey="unit_y"):
-    unique_authors = []
-    unique_text = []
-    seen = set()
-    for i in range(len(df)):
-        for j in range(len(df.iloc[i][textkey])):
-            try:
-                author = df.iloc[i][author_key][j]
-            except:
-                author = df.iloc[i][author_key]
-            text = df.iloc[i][textkey][j]
-            
-            key = []
-            key.append(author)
-            if isinstance(text, list):
-                key.extend(text)
-            else:
-                key.append(text)
-                
-            key = tuple(key)
-            if key not in seen:
-                unique_authors.append(author)
-                unique_text.append(text)
-                seen.add(key)
-    return unique_authors, unique_text
+def calculate_all(df, model_name="luar"):
 
-for file in files:
-    path = os.path.join(base_path, file)
-    df = pd.read_json(path, lines=True)
-    df = df[["author_id_x", "unit_x", "rephrase_x", "inverse", "unit_y", "author_id_y"]]
-    df = df.groupby("author_id_x").agg(list).reset_index()
-    
-    x_unique = set(df.author_id_x.tolist())
-    y_unique = set(flatten(df.author_id_y.tolist()))
-    to_remove = []
-    for author in y_unique:
-        if author not in x_unique:
-            to_remove.append(author)
-    def process(row):
-        indices_to_remove = [i for i in range(len(row["author_id_y"])) if row["author_id_y"][i] in to_remove]
-        indices_to_remove = indices_to_remove[::-1]
-        for _, v in row.items():
-            if isinstance(v, list):
-                for i in indices_to_remove:
-                    v.pop(i)
-        return row
-    df.progress_apply(process, axis=1)
-    
-    queries_author, queries_text = get_unique(df, author_key="author_id_y", textkey="unit_y")
-    assert len(queries_text) == len(set.intersection(x_unique, y_unique))
+    if model_name == "luar":
+        luar, luar_tok = load_luar_model_and_tokenizer()
+        luar = luar.to("cuda")
+        function_kwargs = {
+            "luar": luar,
+            "luar_tok": luar_tok,
+            "normalize": True,
+        }
+    elif model_name == "cisr":
+        cisr = load_cisr_model()
+        cisr = cisr.to("cuda")
+        function_kwargs = {
+            "model": cisr,
+            "normalize": True,
+        }
+    elif model_name == "sbert":
+        sbert = load_sbert_model()
+        sbert = sbert.to("cuda")
+        function_kwargs = {
+            "model": sbert,
+            "normalize": True,
+        }
 
-    rephrase_author = df.author_id_x.tolist()
-    rephrase_text = df.rephrase_x.apply(lambda x: list(set(x))).tolist()
-    assert len(rephrase_text) == len(set.intersection(x_unique, y_unique))
+    author_fn = partial(get_author_embeddings, function_kwargs=function_kwargs, model_name=model_name)
+    instance_fn = partial(get_instance_embeddings, function_kwargs=function_kwargs, model_name=model_name)
 
-    luar, luar_tok = load_luar_model_and_tokenizer()
-    luar.to("cuda")
-
-    query_author_embeddings = [get_luar_author_embeddings(text, luar, luar_tok) for text in tqdm(queries_text)]
-    query_author_embeddings = torch.cat(query_author_embeddings, dim=0)
-
-    rephrase_instance_embeddings = [get_luar_instance_embeddings(text, luar, luar_tok) for text in tqdm(rephrase_text)]
-    rephrase_instance_embeddings = torch.cat(rephrase_instance_embeddings, dim=0)
-
+    author_id_x = np.array(df.author_id_x.tolist())
+    author_id_y = np.array(df.author_id_y.tolist())
+    labels = (author_id_x == author_id_y).astype(int)
+        
     metrics = {}
+        
+    query_author_embeddings = torch.cat(
+            [author_fn(unit) for unit in tqdm(df.unit_y.tolist())],
+            dim=0,
+        ).cpu()
+        
+    ##### Inverse (All):
+    inverse_all_author_embeddings = torch.cat(
+            [author_fn(flatten(inverse)) for inverse in tqdm(df.inverse.tolist())],
+            dim=0,
+        ).cpu()
+    metrics["inverse_all"] = calculate_similarities_and_metrics(
+            query_author_embeddings,
+            inverse_all_author_embeddings,
+            labels,
+            diagonal=True,
+        )
+
+    ##### Inverse (Individual Embedding):
+    inverse_author_embeddings = [[instance_fn(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
+    inverse_author_embeddings = [torch.cat(inverses, dim=0) for inverses in inverse_author_embeddings]
+    for simtype in ["max", "expected"]:
+        metrics[f"inverse_{simtype}"] = calculate_similarities_and_metrics(
+                query_author_embeddings,
+                inverse_author_embeddings,
+                labels,
+                simtype,
+                diagonal=True,
+            )
+
+    ##### Inverse (Single):
+    df["inverse_single"] = df.inverse.apply(lambda xx: [x[0] for x in xx])
+    inverse_single_author_embeddings = torch.cat(
+            [author_fn(inverse).cpu() for inverse in tqdm(df.inverse_single.tolist())],
+            dim=0,
+        )
+    metrics["inverse_single"] = calculate_similarities_and_metrics(
+            query_author_embeddings,
+            inverse_single_author_embeddings,
+            labels,
+            diagonal=True,
+        )
     
-    queries_author = np.array(queries_author)
-    rephrase_author = np.array(rephrase_author)
-    labels_author_author = (queries_author[:, None] == rephrase_author).astype(int)
-    labels_author_instance = []
-    for i in range(len(labels_author_author)):
-        for j in range(len(labels_author_author[i])):
-            if labels_author_author[i][j] == 1:
-                labels_author_instance.extend([1] * len(rephrase_text[i]))
-            else:
-                labels_author_instance.append(0)
+    return metrics
+
+if __name__ == "__main__":
+    debug = False
+    model_names = ["luar", "sbert", "cisr"]
+    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
+    files = [
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=1",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=2",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=3",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author",
+        "none_targetted_6400_temperature=0.7_top_p=0.9.jsonln=5.targetted_mode=author",
+    ]
     
-    import pdb; pdb.set_trace()
-    similarities = util.pytorch_cos_sim(query_author_embeddings, rephrase_instance_embeddings).cpu().numpy().flatten()
-    metrics["EER_rephrase_author_instance"] = calculate_EER(labels_author_instance, similarities)
-
-    import pdb; pdb.set_trace()
-
-
-
-    print(metrics)
+    for file in files:
+        path = os.path.join(base_path, file)
+        
+        df = pd.read_json(path, lines=True)
+        df = df.groupby(["author_id_x", "author_id_y"]).agg(list).reset_index()
+        df.unit_y = df.unit_y.apply(lambda x: x[0])
+        if debug:
+            df = df.iloc[:500]
+            
+        for model in model_names:
+            metrics = calculate_all(df, model)
+            name = file.replace(".jsonl", "")
+            name += f"_{model}"
+            with open(f"./metrics/{name}_author.json", "w") as f:
+                json.dump(metrics, f)

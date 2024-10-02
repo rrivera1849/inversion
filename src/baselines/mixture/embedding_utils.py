@@ -1,16 +1,95 @@
 
 import torch
 import torch.nn.functional as F
+from sentence_transformers import SentenceTransformer
 from transformers import AutoModel, AutoTokenizer
 from tqdm.auto import tqdm
 
-def load_luar_model_and_tokenizer(HF_id: str = "rrivera1849/LUAR-MUD"):
+# st = sentence-transformers
+def load_st_model(
+    HF_id: str
+) -> SentenceTransformer:
+    model = SentenceTransformer(HF_id)
+    model.eval()
+    return model
+
+def load_sbert_model(
+    HF_id: str = "sentence-transformers/all-mpnet-base-v2"
+) -> SentenceTransformer:
+    model = load_st_model(HF_id)
+    return model
+
+def load_cisr_model(
+    HF_id: str = "AnnaWegmann/Style-Embedding"
+) -> SentenceTransformer:
+    model = load_st_model(HF_id)
+    return model
+
+def load_luar_model_and_tokenizer(
+    HF_id: str = "rrivera1849/LUAR-MUD"
+) -> tuple[AutoModel, AutoTokenizer]:
     luar = AutoModel.from_pretrained(HF_id, trust_remote_code=True)
     luar.eval()
-    # RRS - Avoid weird library issue when loading tokenizer
-    # luar_tok = AutoTokenizer.from_pretrained(HF_id, trust_remote_code=True)
+    # RRS - Avoid HF library issue when loading tokenizer:
     luar_tok = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-distilroberta-base-v1")
-    return luar, luar_tok
+    return (luar, luar_tok)
+
+def get_author_embeddings(
+    text: list[str],
+    function_kwargs: dict,
+    model_name: str,
+):
+    assert model_name in ["cisr", "sbert", "luar"]
+    if model_name == "luar":
+        out = get_luar_author_embeddings(text, **function_kwargs)
+    else:
+        out = get_st_author_embeddings(text, **function_kwargs)
+        
+    return out
+
+def get_instance_embeddings(
+    text: list[str],
+    function_kwargs: dict,
+    model_name: str,
+):
+    assert model_name in ["cisr", "sbert", "luar"]
+    if model_name == "luar":
+        out = get_luar_instance_embeddings(text, **function_kwargs)
+    else:
+        out = get_st_instance_embeddings(text, **function_kwargs)
+        
+    return out
+
+@torch.no_grad()
+def get_st_author_embeddings(
+    text: list[str],
+    model: SentenceTransformer,
+    normalize: bool = True,
+) -> torch.Tensor:
+    outputs = model.encode(
+        text, 
+        convert_to_tensor=True, 
+        normalize_embeddings=normalize
+    )
+    outputs = outputs.mean(dim=0, keepdim=True)
+    return outputs
+
+@torch.no_grad()
+def get_st_instance_embeddings(
+    text: list[str],
+    model: SentenceTransformer,
+    batch_size: int = 32,
+    progress_bar: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    outputs = model.encode(
+        text,
+        convert_to_tensor=True,
+        normalize_embeddings=normalize,
+        batch_size=batch_size,
+        show_progress_bar=progress_bar,
+    )
+    return outputs
 
 @torch.no_grad()
 def get_luar_author_embeddings(

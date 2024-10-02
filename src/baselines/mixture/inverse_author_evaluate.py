@@ -1,16 +1,22 @@
 
 import json
 import os
+from functools import partial
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from sentence_transformers import util
 from tqdm import tqdm
 
-from embedding_utils import *
-from metric_utils import *
+from embedding_utils import (
+    load_cisr_model,
+    load_luar_model_and_tokenizer,
+    load_sbert_model,
+    get_author_embeddings,
+    get_instance_embeddings,
+)
+from metric_utils import calculate_similarities_and_metrics
 
 def flatten(lst: list[list[Any]]) -> list[Any]:
     return [item for sublist in lst for item in sublist]
@@ -32,201 +38,198 @@ def read_data(path: str):
     df.drop_duplicates("unit", inplace=True)
     return df
 
-def get_author_instance_labels(
-    df: pd.DataFrame,
-    N: int,
-    use_inverse: bool = False,
-) -> list[int]:
-    if use_inverse:
-        counts = df["inverse"].apply(len).tolist()
-    else:
-        counts = df["rephrase"].apply(len).tolist()
-
-    counts = np.cumsum(counts)
-
-    last = 0
-    labels = []
-    for c in counts:
-        l = [0] * N
-        l[last:c] = [1] * (c - last)
-        last = c
-        labels.extend(l)
-    return labels
-
-def pairwise_similarity(
-    query_embeddings: torch.Tensor,
-    inverse_embeddings: list[torch.Tensor],
-    type: str = "expected",
-) -> list[float]:
-    assert type in ["max", "expected"]
-    type_to_func = {
-        "max": max_similarity,
-        "expected": expected_similarity,
-    }
-    similarities = []
-    pbar = tqdm(total=len(query_embeddings) * len(inverse_embeddings))
-    for i in range(len(query_embeddings)):
-        for j in range(len(inverse_embeddings)):
-            similarities.append(type_to_func[type](query_embeddings[i:i+1], inverse_embeddings[j]))
-            pbar.update(1)
-    return similarities
-
 def calculate_all(
     path: str,
     mode: str = "plagiarism",
+    model_name: str = "luar",
+    debug: bool = False,
 ):
     assert mode in ["plagiarism", "author"]
+    assert model_name in ["luar", "cisr", "sbert"]
+
+    if model_name == "luar":
+        luar, luar_tok = load_luar_model_and_tokenizer()
+        luar = luar.to("cuda")
+        function_kwargs = {
+            "luar": luar,
+            "luar_tok": luar_tok,
+            "normalize": True,
+        }
+    elif model_name == "cisr":
+        cisr = load_cisr_model()
+        cisr = cisr.to("cuda")
+        function_kwargs = {
+            "model": cisr,
+            "normalize": True,
+        }
+    elif model_name == "sbert":
+        sbert = load_sbert_model()
+        sbert = sbert.to("cuda")
+        function_kwargs = {
+            "model": sbert,
+            "normalize": True,
+        }
+
+    author_fn = partial(get_author_embeddings, function_kwargs=function_kwargs, model_name=model_name)
+    instance_fn = partial(get_instance_embeddings, function_kwargs=function_kwargs, model_name=model_name)
     
     metrics = {}
     df = read_data(path)
     df = df.groupby("author_id").agg(list)
     
-    luar, luar_tok = load_luar_model_and_tokenizer()
-    luar = luar.to("cuda")
-
-    if mode == "plagiarism":
-        # query = target
-        # task: plagiarism detection
-        df["unit"] = df["unit"].apply(lambda x: x[:len(x)//2])
-        df["rephrase"] = df["rephrase"].apply(lambda x: x[:len(x)//2])
-        df["inverse"] = df["inverse"].apply(lambda x: x[:len(x)//2])
-    else:
+    if mode == "author":
         # query != target
         # task: author identification
         df["unit"] = df["unit"].apply(lambda x: x[:len(x)//2])
         df["rephrase"] = df["rephrase"].apply(lambda x: x[len(x)//2:])
         df["inverse"] = df["inverse"].apply(lambda x: x[len(x)//2:])
-    
+        
+    if debug:
+        df = df.head(10)
+
     num_author = len(df)
     num_instances = df.rephrase.apply(len).sum()
 
     author_author_labels = np.identity(num_author, dtype=np.int32).flatten().tolist()
     instance_instance_labels = np.identity(num_instances, dtype=np.int32).flatten().tolist()
-    author_instance_labels = get_author_instance_labels(df, num_instances)
 
     # Compute Author Query
-    query_author_embeddings = [get_luar_author_embeddings(unit, luar, luar_tok) for unit in tqdm(df.unit.tolist())]
-    query_author_embeddings = torch.cat(query_author_embeddings, dim=0).cpu()
+    query_author_embeddings = torch.cat(
+        [author_fn(unit) for unit in tqdm(df.unit.tolist())],
+        dim=0,
+    ).cpu()
 
     # Compute Instance Query
-    query_instance_embeddings = [get_luar_instance_embeddings(unit, luar, luar_tok) for unit in tqdm(df.unit.tolist())]
-    query_instance_embeddings = torch.cat(query_instance_embeddings, dim=0).cpu()
+    query_instance_embeddings = torch.cat(
+        [instance_fn(unit) for unit in tqdm(df.unit.tolist())],
+        dim=0
+    ).cpu()
 
     ##### Rephrases:
-    rephrase_instance_embeddings = [get_luar_instance_embeddings(rephrases, luar, luar_tok) for rephrases in tqdm(df.rephrase.tolist())]
-    rephrase_instance_embeddings = torch.cat(rephrase_instance_embeddings, dim=0).cpu()
-    rephrase_author_embeddings = [get_luar_author_embeddings(rephrases, luar, luar_tok) for rephrases in tqdm(df.rephrase.tolist())]
-    rephrase_author_embeddings = torch.cat(rephrase_author_embeddings, dim=0).cpu()
+    rephrase_instance_embeddings = torch.cat(
+        [instance_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
+        dim=0
+    ).cpu()
+    rephrase_author_embeddings = torch.cat(
+        [author_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
+        dim=0,
+    ).cpu()
     assert len(rephrase_instance_embeddings) == num_instances
     assert len(rephrase_author_embeddings) == num_author
-    
-    # Author-Instance:
-    similarities = util.pytorch_cos_sim(query_author_embeddings, rephrase_instance_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_instance_labels, similarities, "rephrase_author-instance"))
-
-    # Author-Author
-    similarities = util.pytorch_cos_sim(query_author_embeddings, rephrase_author_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_author_labels, similarities, "rephrase_author-author"))
 
     if mode == "plagiarism":
         # Instance-Instance:
-        similarities = util.pytorch_cos_sim(query_instance_embeddings, rephrase_instance_embeddings)
-        similarities = similarities.cpu().flatten().tolist()
-        metrics.update(calculate_metrics(instance_instance_labels, similarities, "rephrase_instance-instance"))
+        metrics["rephrase"] = calculate_similarities_and_metrics(
+            query_instance_embeddings,
+            rephrase_instance_embeddings,
+            instance_instance_labels,
+        )
+    else:
+        # Author-Author
+        metrics["rephrase"] = calculate_similarities_and_metrics(
+            query_author_embeddings,
+            rephrase_author_embeddings,
+            author_author_labels,
+        )
 
     ##### Inverse (All):
-    inverse_all_author_embeddings = [get_luar_author_embeddings(flatten(inverses), luar, luar_tok) for inverses in tqdm(df.inverse.tolist())]
-    inverse_all_author_embeddings = torch.cat(inverse_all_author_embeddings, dim=0).cpu()
-    inverse_all_instance_embeddings = [[get_luar_author_embeddings(inverse, luar, luar_tok).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
-    inverse_all_instance_embeddings = [torch.cat(inverses, dim=0) for inverses in inverse_all_instance_embeddings]
-    inverse_all_instance_embeddings = torch.cat(inverse_all_instance_embeddings, dim=0).cpu()
+    inverse_all_author_embeddings = torch.cat(
+        [author_fn(flatten(inverses)) for inverses in tqdm(df.inverse.tolist())],
+        dim=0,
+    ).cpu()
+    inverse_all_instance_embeddings = [[author_fn(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
+    inverse_all_instance_embeddings = torch.cat(
+        [torch.cat(inverses, dim=0) for inverses in inverse_all_instance_embeddings],
+        dim=0
+    ).cpu()
     assert len(inverse_all_instance_embeddings) == num_instances
     assert len(inverse_all_author_embeddings) == num_author
 
-    # Author-Instance:
-    similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_all_instance_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_instance_labels, similarities, "inverse_all_author-instance"))
-
-    # Author-Author
-    similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_all_author_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_author_labels, similarities, "inverse_all_author-author"))
-
     if mode == "plagiarism":
         # Instance-Instance:
-        similarities = util.pytorch_cos_sim(query_instance_embeddings, inverse_all_instance_embeddings)
-        similarities = similarities.cpu().flatten().tolist()
-        metrics.update(calculate_metrics(instance_instance_labels, similarities, "inverse_all_instance-instance"))
-    
+        metrics["inverse_all"] = calculate_similarities_and_metrics(
+            query_instance_embeddings,
+            inverse_all_instance_embeddings,
+            instance_instance_labels,
+        )
+    else:
+        # Author-Author
+        metrics["inverse_all"] = calculate_similarities_and_metrics(
+            query_author_embeddings,
+            inverse_all_author_embeddings,
+            author_author_labels,
+        )
+        
     ##### Inverse (Individual Embedding):
-    inverse_instance_embeddings = [[get_luar_instance_embeddings(inverse, luar, luar_tok).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
+    inverse_instance_embeddings = [[instance_fn(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
     inverse_author_embeddings = [torch.cat(inverses, dim=0) for inverses in inverse_instance_embeddings]
     inverse_instance_embeddings = flatten(inverse_instance_embeddings)
     assert len(inverse_instance_embeddings) == num_instances
     assert len(inverse_author_embeddings) == num_author
     for simtype in ["expected", "max"]:
-        similarities = pairwise_similarity(query_author_embeddings, inverse_instance_embeddings, type=simtype)
-        metrics.update(calculate_metrics(author_instance_labels, similarities, f"inverse-{simtype}_author-instance"))
-        
-        similarities = pairwise_similarity(query_author_embeddings, inverse_author_embeddings, type=simtype)
-        metrics.update(calculate_metrics(author_author_labels, similarities, f"inverse-{simtype}_author-author"))
-
         if mode == "plagiarism":
-            similarities = pairwise_similarity(query_instance_embeddings, inverse_instance_embeddings, type=simtype)
-            metrics.update(calculate_metrics(instance_instance_labels, similarities, f"inverse-{simtype}_instance-instance"))
-
+            metrics[f"inverse_{simtype}"] = calculate_similarities_and_metrics(
+                query_instance_embeddings,
+                inverse_instance_embeddings,
+                instance_instance_labels,
+                simtype,
+            )
+        else:
+            metrics[f"inverse_{simtype}"] = calculate_similarities_and_metrics(
+                query_author_embeddings,
+                inverse_author_embeddings,
+                author_author_labels,
+                simtype,
+            )
+ 
     ##### Inverse (Single Inversion):
     df["single_inversion"] = df.inverse.apply(lambda xx: [x[0] for x in xx])
-    inverse_single_instance_embeddings = [get_luar_instance_embeddings(inverses, luar, luar_tok) for inverses in tqdm(df.single_inversion.tolist())]
+    inverse_single_instance_embeddings = [instance_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
     inverse_single_instance_embeddings = torch.cat(inverse_single_instance_embeddings, dim=0).cpu()
-    inverse_single_author_embeddings = [get_luar_author_embeddings(inverses, luar, luar_tok) for inverses in tqdm(df.single_inversion.tolist())]
+    inverse_single_author_embeddings = [author_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
     inverse_single_author_embeddings = torch.cat(inverse_single_author_embeddings, dim=0).cpu()
     assert len(inverse_single_instance_embeddings) == num_instances
     assert len(inverse_single_author_embeddings) == num_author
 
-    # Author-Instance:
-    similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_single_instance_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_instance_labels, similarities, "inverse_single_author-instance"))
-    
-    # Author-Author
-    similarities = util.pytorch_cos_sim(query_author_embeddings, inverse_single_author_embeddings)
-    similarities = similarities.cpu().flatten().tolist()
-    metrics.update(calculate_metrics(author_author_labels, similarities, "inverse_single_author-author"))
-
     if mode == "plagiarism":
         # Instance-Instance:
-        similarities = util.pytorch_cos_sim(query_instance_embeddings, inverse_single_instance_embeddings)
-        similarities = similarities.cpu().flatten().tolist()
-        metrics.update(calculate_metrics(instance_instance_labels, similarities, "inverse_single_instance-instance"))
-
+        metrics["inverse_single"] = calculate_similarities_and_metrics(
+            query_instance_embeddings,
+            inverse_single_instance_embeddings,
+            instance_instance_labels,
+        )
+    else:
+        # Author-Author
+        metrics["inverse_single"] = calculate_similarities_and_metrics(
+            query_author_embeddings,
+            inverse_single_author_embeddings,
+            author_author_labels,
+        )
+        
     return metrics
 
 if __name__ == "__main__":
     os.makedirs("./metrics", exist_ok=True)
     base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
+    model_names = ["luar", "sbert", "cisr"]
     files = [
         "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=0.5_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=0.6_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=0.8_top_p=0.9.jsonl.vllm_n=100",
+        "none_6400_temperature=0.9_top_p=0.9.jsonl.vllm_n=100",
         "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
         "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
     ]
-    for file in files:
-        path = os.path.join(base_path, file)
-        metrics_plagiarism = calculate_all(path)
-        metrics_author = calculate_all(path, "author")
-        
-        print(f"File: {file}")
-        print("Plagiarism")
-        print(metrics_plagiarism)
-        print("Author")
-        print(metrics_author)
-        print()
-        
-        name = file[:-len(".jsonl.vllm_n=100")]
-        with open(f"./metrics/{name}_plagiarism.json", "w") as f:
-            json.dump(metrics_plagiarism, f)
-        with open(f"./metrics/{name}_author.json", "w") as f:
-            json.dump(metrics_author, f)
+    for model in model_names:
+        for file in files:
+            print(f"File: {file}")
+            path = os.path.join(base_path, file)
+            metrics_plagiarism = calculate_all(path, mode="plagiarism", model_name=model)
+            metrics_author = calculate_all(path, mode="author", model_name=model)
+            
+            name = file[:-len(".jsonl.vllm_n=100")] + f"_{model}"
+            with open(f"./metrics/{name}_plagiarism.json", "w") as f:
+                json.dump(metrics_plagiarism, f)
+            with open(f"./metrics/{name}_author.json", "w") as f:
+                json.dump(metrics_author, f)
