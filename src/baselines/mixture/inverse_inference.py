@@ -26,7 +26,6 @@ from vllm import (
 from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
     build_inverse_prompt,
-    clean_duplicate_units,
     get_mixture_weights, 
     load_mixture_predictor,
 )
@@ -48,6 +47,7 @@ parser.add_argument("--vllm", default=False, action="store_true")
 parser.add_argument("--num_generations", type=int, default=1)
 parser.add_argument("--with_style_embeddings", default=False, action="store_true")
 parser.add_argument("--with_examples", default=False, action="store_true")
+parser.add_argument("--num_examples", type=int, default=None)
 parser.add_argument("--targetted_mode", type=str, default=None,
                     choices=["author", "plagiarism"])
 parser.add_argument("--debug", default=False, action="store_true")
@@ -81,6 +81,8 @@ def create_output_file(
     output_fname += f".vllm_n={args.num_generations}" if args.vllm else f"n={args.num_generations}"
     if "targetted" in args.prompt_type:
         output_fname += f".targetted_mode={args.targetted_mode}"
+    if args.num_examples is not None:
+        output_fname += f"_num_examples={args.num_examples}"
     output_fname += ".debug" if DEBUG else ""
     
     if os.path.exists(output_fname):
@@ -432,7 +434,10 @@ def main():
         key = "rephrase_x" if args.with_style_embeddings or args.with_examples else "rephrase"
         text = [b[key] for b in batch]
         if args.with_examples:
-            examples = [b["unit_y"] for b in batch]
+            if args.num_examples is not None:
+                examples = [b["unit_y"][:args.num_examples] for b in batch]
+            else:
+                examples = [b["unit_y"] for b in batch]
             prompt_text = get_prompt_text(text, examples=examples)
         else:
             prompt_text = get_prompt_text(text, mixture_predictor)
@@ -467,7 +472,7 @@ def main():
             output_fout.flush()
 
         if DEBUG:
-            # import pdb; pdb.set_trace()
+            import pdb; pdb.set_trace()
             break
 
     return 0
