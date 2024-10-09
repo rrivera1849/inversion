@@ -19,6 +19,8 @@ set_seed(43)
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str, default=None, required=True,
                     help="Path to the dataset to generate prompts for.")
+parser.add_argument("--prompt_type", type=str, default="rephrase",
+                    choices=["rephrase", "respond_reddit"])
 parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
                     choices=["mistralai/Mistral-7B-Instruct-v0.3", 
                              "meta-llama/Meta-Llama-3-8B-Instruct",
@@ -43,7 +45,7 @@ DATASET.rename(columns={"syms": "unit"}, inplace=True)
 to_expode = [col for col in DATASET.columns if col != "author_id"]
 DATASET = DATASET.explode(to_expode).reset_index(drop=True)
 
-PROMPT = get_prompt("rephrase")
+PROMPT = get_prompt(args.prompt_type)
 model = LLM(args.model_name)
 
 def get_generations(
@@ -61,8 +63,8 @@ def get_generations(
     return outputs
 
 basename, dirname = os.path.basename(args.dataset_path), os.path.dirname(args.dataset_path)
-dataset_name = "{}_{}_rephrases_temperature={}_top_p={}.jsonl".format(
-    basename, args.model_name.split("/")[1], args.temperature, args.top_p
+dataset_name = "{}_{}_{}_temperature={}_top_p={}.jsonl".format(
+    basename, args.model_name.split("/")[1], args.prompt_type, args.temperature, args.top_p
 )
 dirname = os.path.join(dirname, "generations")
 os.makedirs(dirname, exist_ok=True)
@@ -85,10 +87,12 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
     # Create prompts
     prompts = []
     dataset_indices = []
+    examples = []
     for j in range(i, min(i+args.example_batch_size, len(DATASET))):
         example = DATASET.iloc[j]["unit"]
         prompts.append(PROMPT.format(example))
         dataset_indices.append(j)
+        examples.append(example)
         
     if "Phi-3" in args.model_name:
         # https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
@@ -114,8 +118,8 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
         index = dataset_indices[j]
         record = DATASET.iloc[index].to_dict()
         record["model_name"] = args.model_name.split("/")[1]
-        record["rephrase"] = clean_generation(generations[j], is_reddit=True)
-        record["rephrase_prompt"] = prompts[j]
+        record[args.prompt_type] = clean_generation(generations[j], is_reddit=True)
+        record[args.prompt_type + "_prompt"] = prompts[j]
         record["dataset_index"] = index
         fout.write(json.dumps(record) + "\n")
 
