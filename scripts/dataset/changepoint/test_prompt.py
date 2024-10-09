@@ -1,20 +1,20 @@
-"""Very similar to hf_prompt.py, but works on the RAID dataset. 
-"""
 
 import json
 import os
-import random
 from argparse import ArgumentParser
 
 import pandas as pd
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
+from transformers import set_seed
 from tqdm import tqdm
+from vllm import (
+    LLM,
+    SamplingParams,
+)
 
 from prompts import *
 from utils import clean_generation
 
-random.seed(43)
+set_seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str, default=None, required=True,
@@ -34,16 +34,9 @@ parser.add_argument("--temperature", type=float, default=0.7,
                     help="Generation temperature.")
 parser.add_argument("--top_p", type=float, default=0.9,
                     help="Generation top-p.")
-parser.add_argument("--fall_back", default=False, action="store_true",
-                    help="Fall back to smaller batch size if the number of tokens is too large.")
-parser.add_argument("--fall_back_num_tokens", type=int, default=450,
-                    help="Number of tokens to fall back to.")
 parser.add_argument("--debug", action="store_true", 
                     help="Enable debugging mode.")
 args = parser.parse_args()
-
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
 
 DATASET = pd.read_json(args.dataset_path, lines=True)
 DATASET.rename(columns={"syms": "unit"}, inplace=True)
@@ -51,74 +44,21 @@ to_expode = [col for col in DATASET.columns if col != "author_id"]
 DATASET = DATASET.explode(to_expode).reset_index(drop=True)
 
 PROMPT = get_prompt("rephrase")
+model = LLM(args.model_name)
 
-attn_implementation = "flash_attention_2" if "Phi-3" in args.model_name else None
-model = AutoModelForCausalLM.from_pretrained(
-    args.model_name, 
-    device_map="auto", 
-    torch_dtype=torch.float16,
-    trust_remote_code=True,
-    attn_implementation=attn_implementation,
-)
-
-if "Mistral" in args.model_name.split('/')[1]:
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision="pr/51")
-    tokenizer.pad_token = tokenizer.eos_token
-    model.generation_config.pad_token_id = tokenizer.pad_token_id
-elif "Mixtral" in args.model_name.split('/')[1]:
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    tokenizer.pad_token = tokenizer.eos_token
-    model.generation_config.pad_token_id = tokenizer.pad_token_id
-elif "Meta-Llama" in args.model_name.split('/')[1]:
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, padding_side="left")
-    tokenizer.pad_token = tokenizer.eos_token
-    model.generation_config.pad_token_id = tokenizer.pad_token_id
-else:
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-
-generation_config = GenerationConfig(
-    temperature=args.temperature,
-    do_sample=True,
-    top_p=args.top_p,
-    max_new_tokens=args.max_gen_len,
-)
-
-def count_num_tokens(prompt):
-    return len(tokenizer(prompt)["input_ids"])
-
-def get_generations(prompts, sub_batch_size=1):
-    """Returns a list of completions for the given prompts.
-    """
-    with torch.inference_mode():
-        generations = []
-        num_tokens = [count_num_tokens(prompt) for prompt in prompts]
-        
-        if args.fall_back and max(num_tokens) > args.fall_back_num_tokens:
-            print("Falling to smaller batch size due to large number of tokens...")
-            prompts = [prompts[i:i+sub_batch_size] for i in range(0, len(prompts), sub_batch_size)]
-        else:
-            prompts = [prompts]
-
-        for j, prompt_batch in enumerate(prompts):
-            inputs = tokenizer(
-                prompt_batch,
-                max_length=1024,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-            ).to("cuda")
-            output = model.generate(**inputs, generation_config=generation_config)
-
-            prompt_lengths = [len(prompt_batch[i]) for i in range(len(prompt_batch))]
-            if "Phi-3" in args.model_name:
-                prompt_lengths = [length - 32 for length in prompt_lengths]
-            generations.extend([
-                tokenizer.decode(output[i], skip_special_tokens=True)[prompt_lengths[i]:] 
-                for i in range(len(prompt_batch))
-            ])
-
-    assert len(generations) == sum(len(prompt_batch) for prompt_batch in prompts)
-    return generations
+def get_generations(
+    prompt_text: list[str],
+) -> list[str]:
+    sampling_params = SamplingParams(
+        n=1,
+        max_tokens=args.max_gen_len,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
+    
+    outputs = model.generate(prompt_text, sampling_params)
+    outputs = [[o.text for o in out.outputs][0] for out in outputs]
+    return outputs
 
 basename, dirname = os.path.basename(args.dataset_path), os.path.dirname(args.dataset_path)
 dataset_name = "{}_{}_rephrases_temperature={}_top_p={}.jsonl".format(
@@ -149,7 +89,7 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
         example = DATASET.iloc[j]["unit"]
         prompts.append(PROMPT.format(example))
         dataset_indices.append(j)
-
+        
     if "Phi-3" in args.model_name:
         # https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
         prompts = [
@@ -180,4 +120,5 @@ for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
         fout.write(json.dumps(record) + "\n")
 
     if args.debug:
+        import pdb; pdb.set_trace()
         break
