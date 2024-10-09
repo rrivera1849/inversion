@@ -19,6 +19,7 @@ set_seed(43)
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str, default=None, required=True,
                     help="Path to the dataset to generate prompts for.")
+parser.add_argument("--key", type=str, default="unit")
 parser.add_argument("--prompt_type", type=str, default="rephrase",
                     choices=["rephrase", "respond_reddit"])
 parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
@@ -99,7 +100,7 @@ for i in tqdm(range(last_index, end_index, args.example_batch_size)):
     dataset_indices = []
     examples = []
     for j in range(i, min(i+args.example_batch_size, end_index)):
-        example = DATASET.iloc[j]["unit"]
+        example = DATASET.iloc[j][args.key]
         prompts.append(PROMPT.format(example))
         dataset_indices.append(j)
         examples.append(example)
