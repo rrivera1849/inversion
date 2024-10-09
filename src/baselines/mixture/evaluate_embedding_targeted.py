@@ -52,7 +52,7 @@ def calculate_all(df, model_name="luar"):
 
     author_id_x = np.array(df.author_id_x.tolist())
     author_id_y = np.array(df.author_id_y.tolist())
-    labels = (author_id_x == author_id_y).astype(int)
+    labels = (author_id_x == author_id_y).astype(int).tolist()
         
     metrics = {}
         
@@ -123,6 +123,7 @@ if __name__ == "__main__":
             
         for model in model_names:
             metrics = calculate_all(df, model)
+
             name = file.replace(".jsonl", "")
             name += f"_{model}"
             with open(f"./metrics/{name}_author.json", "w") as f:
