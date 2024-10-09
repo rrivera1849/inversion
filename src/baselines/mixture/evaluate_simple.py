@@ -37,6 +37,15 @@ def token_f1(
         F1s.append(f1)
     return F1s
 
+def BLEU_score(
+    predictions: list[str], 
+    references: list[str],
+):
+    try:
+        return BLEU.compute(predictions=predictions, references=references)["bleu"]
+    except ZeroDivisionError:
+        return 0.0
+
 def compute_metrics(input, targeted=False):
     _, row = input
     
@@ -59,8 +68,8 @@ def compute_metrics(input, targeted=False):
     metrics["token_f1"]["inverse_expected"] = np.mean(inverse_token_f1)
     metrics["token_f1"]["inverse_max"] = np.max(inverse_token_f1)
 
-    metrics["bleu"]["rephrase"] = BLEU.compute(predictions=[rephrase], references=[unit])["bleu"]
-    inverse_bleu = [BLEU.compute(predictions=[inv], references=[unit])["bleu"] for inv in inverse]
+    metrics["bleu"]["rephrase"] = BLEU_score(predictions=[rephrase], references=[unit])
+    inverse_bleu = [BLEU_score(predictions=[inv], references=[unit]) for inv in inverse]
     metrics["bleu"]["inverse_single"] = inverse_bleu[0]
     metrics["bleu"]["inverse_expected"] = np.mean(inverse_bleu)
     metrics["bleu"]["inverse_max"] = np.max(inverse_bleu)
