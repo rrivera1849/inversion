@@ -43,7 +43,6 @@ def semantic_similarity(units: list[str], rephrases: list[str], chunksize: int =
         all_results.extend(result)
     return np.array(all_results)
 
-import pdb; pdb.set_trace()
 mask = df.apply(unit_is_rephrase, axis=1)
 df = df[~mask]
 
@@ -56,7 +55,6 @@ mask = df.rephrase.apply(lambda x: len(x)) > 20
 df = df[mask]
 df.drop(columns=["dataset_index"], inplace=True)
 
-import pdb; pdb.set_trace()
 save_dirname = os.path.dirname(DIRNAME)
 save_fname = os.path.join(save_dirname, prefix + ".cleaned")
 if DEBUG:
