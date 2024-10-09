@@ -36,6 +36,8 @@ parser.add_argument("--temperature", type=float, default=0.7,
                     help="Generation temperature.")
 parser.add_argument("--top_p", type=float, default=0.9,
                     help="Generation top-p.")
+parser.add_argument("--index_start", type=int, default=None)
+parser.add_argument("--index_end", type=int, default=None)
 parser.add_argument("--debug", action="store_true", 
                     help="Enable debugging mode.")
 args = parser.parse_args()
@@ -78,17 +80,25 @@ if os.path.isfile(savename):
         fout = open(savename, "w+")
         last_index = 0
         print(f"Creating {dataset_name}, last_index={last_index}")
+
 else:
     fout = open(savename, "w+")
     last_index = 0
     print(f"Creating {dataset_name}, last_index={last_index}")
 
-for i in tqdm(range(last_index, len(DATASET), args.example_batch_size)):
+if args.index_start is not None:
+    last_index = args.index_start
+    print(f"Overwriting last_index to {args.index_start}")
+
+end_index = len(DATASET) if args.index_end is None else args.index_end
+print(f"Generating prompts for {end_index-last_index} examples.")
+
+for i in tqdm(range(last_index, end_index, args.example_batch_size)):
     # Create prompts
     prompts = []
     dataset_indices = []
     examples = []
-    for j in range(i, min(i+args.example_batch_size, len(DATASET))):
+    for j in range(i, min(i+args.example_batch_size, end_index)):
         example = DATASET.iloc[j]["unit"]
         prompts.append(PROMPT.format(example))
         dataset_indices.append(j)
