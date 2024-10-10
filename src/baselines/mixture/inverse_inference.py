@@ -45,7 +45,7 @@ parser.add_argument("--with_style_embeddings", default=False, action="store_true
 parser.add_argument("--with_examples", default=False, action="store_true")
 parser.add_argument("--num_examples", type=int, default=None)
 parser.add_argument("--targetted_mode", type=str, default=None,
-                    choices=["author"])
+                    choices=["author", "eval_all"])
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
@@ -79,6 +79,8 @@ def create_output_file(
         output_fname += f".targetted_mode={args.targetted_mode}"
     if args.num_examples is not None:
         output_fname += f"_num_examples={args.num_examples}"
+    if args.targetted_mode is not None:
+        output_fname += f"_targetted_mode={args.targetted_mode}"
     output_fname += ".debug" if DEBUG else ""
     
     if os.path.exists(output_fname):
@@ -306,9 +308,9 @@ def get_VLLM_generations(
 def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
     """Converts the data to targetted mode for AuthorID.
     """
-    data = pd.merge(data, data, how="cross")
-
     if targetted_mode == "author":
+        data = pd.merge(data, data, how="cross")
+
         for col in data.columns:
             if "author_id" in col:
                 continue
@@ -317,15 +319,35 @@ def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
             else:
                 data[col] = data[col].apply(lambda x: x[len(x)//2:])
 
-    to_explode = [col for col in data.columns if col.endswith("_x") and "author_id" not in col]
-    data = data.explode(to_explode)
-    return data
+        to_explode = [col for col in data.columns if col.endswith("_x") and "author_id" not in col]
+        data = data.explode(to_explode)
+        return data
+    else:
+        data = data[["author_id", "rephrase", "unit"]]
+        data = data.explode("rephrase").reset_index(drop=True)
+        
+        j = 0
+        current_author = data.iloc[0].author_id
+        for index, row in data.iterrows():
+            author_id = row["author_id"]
+            if author_id != current_author:
+                j = 0
+
+            unit_to_remove = row["unit"][j]
+            units_to_keep = [unit for unit in row["unit"] if unit != unit_to_remove]
+            units_to_keep = sorted(list(set(units_to_keep)))
+            data.at[index, "unit"] = units_to_keep
+            j += 1
+
+        # rename to unit_y and rephrase_x
+        data.rename(columns={"rephrase": "rephrase_x", "unit": "unit_y"}, inplace=True)
+        return data
 
 def get_num_expected_rows(data: pd.DataFrame, targetted_mode: str):
     if targetted_mode == "author":
         num_expected = data["rephrase"].apply(lambda x: len(x) // 2).sum() * 100
     else:
-        num_expected = data["rephrase"].apply(lambda x: len(x)).sum() * 100
+        num_expected = data["rephrase"].apply(lambda x: len(x)).sum()
     return num_expected
 
 def clean_duplicate_units(data: pd.DataFrame):
@@ -367,7 +389,7 @@ def main():
         assert len(data) == num_expected
     
     style_embeddings = None
-    if args.with_style_embeddings:
+    if args.with_style_embeddings and args.targetted_mode == "author":
         print(colored("Calculating Style Embeddings", "green"))
         
         # 1. There are only `num_authors` unique targets:
@@ -393,6 +415,23 @@ def main():
         # 3. Map the targetted samples to their respective style embeddings:
         data["embedding_idx"] = data.author_id_y.map(mapping)
         data = data.to_dict(orient="records")
+    elif args.with_style_embeddings and args.targetted_mode == "eval_all":
+        target_text = data["unit_y"].tolist()
+        
+        # 1. Embed the target text using the LUAR model, and project it to the
+        #   Mistral embedding space
+        style_embedding_projector = load_style_embedding_projection(args.prompt_type)
+        luar, luar_tok = load_luar_model_and_tokenizer()
+        luar.to("cuda")
+        style_embeddings = [get_luar_author_embeddings(target, luar, luar_tok) for target in target_text]
+        style_embeddings = torch.cat(style_embeddings, dim=0)
+        style_embeddings = style_embedding_projector(style_embeddings)
+        style_embeddings = style_embeddings.unsqueeze(1)
+        style_embeddings = style_embeddings.to(torch.bfloat16)
+
+        # 3. Map the targetted samples to their respective style embeddings:
+        data["embedding_idx"] = range(len(data))
+        data = data.to_dict(orient="records")
     elif args.with_examples:
         data = data.to_dict(orient="records")
 
@@ -414,6 +453,8 @@ def main():
             else:
                 examples = [b["unit_y"] for b in batch]
             prompt_text = get_prompt_text(text, examples=examples)
+        else:
+            prompt_text = get_prompt_text(text)
         
         if args.with_style_embeddings:
             embedding_indices = [b["embedding_idx"] for b in batch]
