@@ -24,8 +24,9 @@ def flatten(lst: list[list[Any]]) -> list[Any]:
 
 def calculate_all(df, model_name="luar"):
 
-    if model_name == "luar":
-        luar, luar_tok = load_luar_model_and_tokenizer()
+    if model_name == "luar" or model_name == "crud":
+        HF_identifier = "rrivera1849/LUAR-CRUD" if model_name == "crud" else "rrivera1849/LUAR-MUD"
+        luar, luar_tok = load_luar_model_and_tokenizer(HF_identifier)
         luar = luar.to("cuda")
         function_kwargs = {
             "luar": luar,
@@ -102,7 +103,7 @@ def calculate_all(df, model_name="luar"):
 
 if __name__ == "__main__":
     debug = False
-    model_names = ["luar", "sbert", "cisr"]
+    model_names = ["crud"]
     base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
     files = [
         "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=1",
