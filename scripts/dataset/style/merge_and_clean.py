@@ -10,6 +10,16 @@ from sentence_transformers.util import cos_sim
 from tqdm import tqdm
 
 prefix = sys.argv[1]
+
+if len(sys.argv) > 2:
+    orig_key = sys.argv[2]
+    rephrase_key = sys.argv[3]
+    new_unit_column = True
+else:
+    orig_key = "unit"
+    rephrase_key = "rephrase"
+    new_unit_column = False
+
 DIRNAME = "/data1/yubnub/changepoint/MUD_inverse/raw/generations"
 DEBUG = False
 nrows = 100 if DEBUG else None
@@ -21,7 +31,11 @@ input("Continue?")
 filenames = [os.path.join(DIRNAME, fname) for fname in filenames if prefix in fname]
 
 df = pd.concat([pd.read_json(fname, lines=True, nrows=nrows) for fname in filenames])
-df.drop_duplicates(["unit", "rephrase"], inplace=True)
+if new_unit_column: 
+    df.drop("unit", inplace=True, axis=1)
+df.drop_duplicates([orig_key, rephrase_key], inplace=True)
+if new_unit_column:
+    df.rename(columns={orig_key: "unit", rephrase_key: "rephrase"}, inplace=True)
 
 # ensure LLMs did something reasonable
 def unit_is_rephrase(row: dict):
