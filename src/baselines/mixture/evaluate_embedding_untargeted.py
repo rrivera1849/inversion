@@ -47,8 +47,9 @@ def calculate_all(
     assert mode in ["plagiarism", "author"]
     assert model_name in ["luar", "cisr", "sbert"]
 
-    if model_name == "luar":
-        luar, luar_tok = load_luar_model_and_tokenizer()
+    if model_name == "luar" or model_name == "crud":
+        HF_identifier = "rrivera1849/LUAR-CRUD" if model_name == "crud" else "rrivera1849/LUAR-MUD"
+        luar, luar_tok = load_luar_model_and_tokenizer(HF_identifier)
         luar = luar.to("cuda")
         function_kwargs = {
             "luar": luar,
@@ -211,15 +212,15 @@ def calculate_all(
 if __name__ == "__main__":
     os.makedirs("./metrics", exist_ok=True)
     base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-    model_names = ["luar", "sbert", "cisr"]
+    model_names = ["crud"]
     files = [
         "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.5_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.6_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.8_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.9_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=0.5_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=0.6_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=0.8_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=0.9_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
+        # "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
     ]
     for model in model_names:
         for file in files:
