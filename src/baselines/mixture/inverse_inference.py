@@ -26,8 +26,6 @@ from vllm import (
 from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
     build_inverse_prompt,
-    get_mixture_weights, 
-    load_mixture_predictor,
 )
 
 set_seed(43)
@@ -37,8 +35,6 @@ parser.add_argument("--dataset_name", type=str,
                     default="data.jsonl.filtered.cleaned_kmeans_100")
 parser.add_argument("--filename", type=str, default="test.small.jsonl")
 parser.add_argument("--prompt_type", type=str, default="none")
-parser.add_argument("--mixture_predictor_path", type=str, default=None,
-                    help="Path to the mixture predictor model.")
 parser.add_argument("--num", type=int, default=6400)
 parser.add_argument("--temperature", type=float, default=0.7)
 parser.add_argument("--top_p", type=float, default=0.9)
@@ -49,7 +45,7 @@ parser.add_argument("--with_style_embeddings", default=False, action="store_true
 parser.add_argument("--with_examples", default=False, action="store_true")
 parser.add_argument("--num_examples", type=int, default=None)
 parser.add_argument("--targetted_mode", type=str, default=None,
-                    choices=["author", "plagiarism"])
+                    choices=["author"])
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
@@ -99,7 +95,7 @@ def load_inverse_model(
     prompt_type: str = "none",
     vllm: bool = False,
 ) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
-    """Loads our inversion model, either with or without Mixture Weights in the prompt.
+    """Loads our inversion model, either with VLLM or without.
     """
     checkpoint_path = os.path.join(
         INVERSE_SAVEPATH, 
@@ -136,7 +132,7 @@ def load_inverse_model(
 def load_style_embedding_projection(
     prompt_type: str = "none",
 ) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
-    """Loads our inversion model, either with or without Mixture Weights in the prompt.
+    """Load the Style Emb. Projection layer.
     """
     checkpoint_path = os.path.join(
         INVERSE_SAVEPATH, 
@@ -163,25 +159,11 @@ def load_prompting_data(
 
 def get_prompt_text(
     text: list[str],
-    mixture_predictor = None,
     examples: list[list[str]] = None,
 ) -> list[str]:
     """Generates the prompt text for the inverse model.
     """
-    if "none" not in args.prompt_type:
-        mixture_probs = get_mixture_weights(
-                mixture_predictor,
-                text,
-                key=None,
-                batch_size=BATCH_SIZE,
-                progress_bar=False,
-            )
-        mixture_tokens = [mixture_predictor.tokenizer.tokenize(t) for t in text]
-        prompt_text = [
-                build_inverse_prompt(sample, "", tokens, probs, prompt_type=args.prompt_type, no_stop_tokens=True)
-                for sample, tokens, probs in zip(text, mixture_tokens, mixture_probs)
-            ]
-    elif examples is not None:
+    if examples is not None:
         prompt_text = [
             build_inverse_prompt(t, "", examples=e, no_stop_tokens=True) for t, e in zip(text, examples)
         ]
@@ -322,7 +304,7 @@ def get_VLLM_generations(
     return outputs
 
 def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
-    """Converts the data to targetted mode for Plagiarism or Authorship ID.
+    """Converts the data to targetted mode for AuthorID.
     """
     data = pd.merge(data, data, how="cross")
 
@@ -370,13 +352,6 @@ def clean_duplicate_units(data: pd.DataFrame):
     return data
 
 def main():
-    if args.targetted_mode == "plagiarism":
-        raise NotImplementedError("Plagiarism mode is not supported yet.")
-    
-    mixture_predictor = None
-    if "none" not in args.prompt_type:
-        mixture_predictor = load_mixture_predictor(args.mixture_predictor_path)
-
     data = load_prompting_data()
     
     if args.targetted_mode is not None:
@@ -439,8 +414,6 @@ def main():
             else:
                 examples = [b["unit_y"] for b in batch]
             prompt_text = get_prompt_text(text, examples=examples)
-        else:
-            prompt_text = get_prompt_text(text, mixture_predictor)
         
         if args.with_style_embeddings:
             embedding_indices = [b["embedding_idx"] for b in batch]
