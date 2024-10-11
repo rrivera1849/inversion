@@ -1,6 +1,9 @@
+# Untargeted Models
+# Targeted Models on eval_all
 
 import json
 import os
+from argparse import ArgumentParser
 from functools import partial
 from typing import Any
 
@@ -8,6 +11,15 @@ import numpy as np
 import pandas as pd
 import torch
 from tqdm import tqdm
+
+parser = ArgumentParser()
+parser.add_argument("--filename", type=str, default=None, required=True)
+parser.add_argument("--dataset_name", type=str, default="data.jsonl.filtered.cleaned_kmeans_100")
+parser.add_argument("--model_name", type=str, default="crud", 
+                    choices=["mud", "crud", "cisr", "sbert"])
+parser.add_argument("--mode", type=str, default=["plagiarism"], nargs="+")
+parser.add_argument("--debug", action="store_true")
+args = parser.parse_args()
 
 from embedding_utils import (
     load_cisr_model,
@@ -24,17 +36,18 @@ def flatten(lst: list[list[Any]]) -> list[Any]:
 def read_data(path: str):
     df = pd.read_json(path, lines=True)
 
-    # This is all very unfortunate, but I forgot to save the `author_id` in the 
-    # small test set I saved, here we are recovering it:
-    path_test_full = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/test.jsonl"
-    df_test_full = pd.read_json(path_test_full, lines=True)
-    df_test_full = df_test_full.groupby("author_id").agg(list).iloc[:100]
-    to_explode = [col for col in df_test_full.columns if col != "author_id"]
-    df_test_full = df_test_full.explode(to_explode).reset_index()
-    assert df_test_full.unit.tolist() == df.unit.tolist()
-    author_ids = df_test_full.author_id.tolist()
-    
-    df["author_id"] = author_ids
+    if "author_id" not in df.columns:
+        # This is all very unfortunate, but I forgot to save the `author_id` in the 
+        # small test set I saved, here we are recovering it:
+        path_test_full = f"/data1/yubnub/changepoint/MUD_inverse/data/{args.dataset_name}/test.jsonl"
+        df_test_full = pd.read_json(path_test_full, lines=True)
+        df_test_full = df_test_full.groupby("author_id").agg(list).iloc[:100]
+        to_explode = [col for col in df_test_full.columns if col != "author_id"]
+        df_test_full = df_test_full.explode(to_explode).reset_index()
+        assert df_test_full.unit.tolist() == df.unit.tolist()
+        author_ids = df_test_full.author_id.tolist()
+        df["author_id"] = author_ids
+
     df.drop_duplicates("unit", inplace=True)
     return df
 
@@ -45,9 +58,9 @@ def calculate_all(
     debug: bool = False,
 ):
     assert mode in ["plagiarism", "author"]
-    assert model_name in ["luar", "cisr", "sbert"]
+    assert model_name in ["mud", "crud", "cisr", "sbert"]
 
-    if model_name == "luar" or model_name == "crud":
+    if model_name == "mud" or model_name == "crud":
         HF_identifier = "rrivera1849/LUAR-CRUD" if model_name == "crud" else "rrivera1849/LUAR-MUD"
         luar, luar_tok = load_luar_model_and_tokenizer(HF_identifier)
         luar = luar.to("cuda")
@@ -94,29 +107,32 @@ def calculate_all(
     author_author_labels = np.identity(num_author, dtype=np.int32).flatten().tolist()
     instance_instance_labels = np.identity(num_instances, dtype=np.int32).flatten().tolist()
 
-    # Compute Author Query
-    query_author_embeddings = torch.cat(
-        [author_fn(unit) for unit in tqdm(df.unit.tolist())],
-        dim=0,
-    ).cpu()
-
-    # Compute Instance Query
-    query_instance_embeddings = torch.cat(
-        [instance_fn(unit) for unit in tqdm(df.unit.tolist())],
-        dim=0
-    ).cpu()
+    if mode == "author":
+        # Compute Author Query
+        query_author_embeddings = torch.cat(
+            [author_fn(unit) for unit in tqdm(df.unit.tolist())],
+            dim=0,
+        ).cpu()
+    else:
+        # Compute Instance Query
+        query_instance_embeddings = torch.cat(
+            [instance_fn(unit) for unit in tqdm(df.unit.tolist())],
+            dim=0
+        ).cpu()
 
     ##### Rephrases:
-    rephrase_instance_embeddings = torch.cat(
-        [instance_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
-        dim=0
-    ).cpu()
-    rephrase_author_embeddings = torch.cat(
-        [author_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
-        dim=0,
-    ).cpu()
-    assert len(rephrase_instance_embeddings) == num_instances
-    assert len(rephrase_author_embeddings) == num_author
+    if mode == "plagiarism":
+        rephrase_instance_embeddings = torch.cat(
+            [instance_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
+            dim=0
+        ).cpu()
+        assert len(rephrase_instance_embeddings) == num_instances
+    else:
+        rephrase_author_embeddings = torch.cat(
+            [author_fn(rephrases) for rephrases in tqdm(df.rephrase.tolist())],
+            dim=0,
+        ).cpu()
+        assert len(rephrase_author_embeddings) == num_author
 
     if mode == "plagiarism":
         # Instance-Instance:
@@ -134,17 +150,19 @@ def calculate_all(
         )
 
     ##### Inverse (All):
-    inverse_all_author_embeddings = torch.cat(
-        [author_fn(flatten(inverses)) for inverses in tqdm(df.inverse.tolist())],
-        dim=0,
-    ).cpu()
-    inverse_all_instance_embeddings = [[author_fn(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
-    inverse_all_instance_embeddings = torch.cat(
-        [torch.cat(inverses, dim=0) for inverses in inverse_all_instance_embeddings],
-        dim=0
-    ).cpu()
-    assert len(inverse_all_instance_embeddings) == num_instances
-    assert len(inverse_all_author_embeddings) == num_author
+    if mode == "author":
+        inverse_all_author_embeddings = torch.cat(
+            [author_fn(flatten(inverses)) for inverses in tqdm(df.inverse.tolist())],
+            dim=0,
+        ).cpu()
+        assert len(inverse_all_author_embeddings) == num_author
+    else:
+        inverse_all_instance_embeddings = [[author_fn(inverse).cpu() for inverse in inverses] for inverses in tqdm(df.inverse.tolist())]
+        inverse_all_instance_embeddings = torch.cat(
+            [torch.cat(inverses, dim=0) for inverses in inverse_all_instance_embeddings],
+            dim=0
+        ).cpu()
+        assert len(inverse_all_instance_embeddings) == num_instances
 
     if mode == "plagiarism":
         # Instance-Instance:
@@ -185,12 +203,14 @@ def calculate_all(
  
     ##### Inverse (Single Inversion):
     df["single_inversion"] = df.inverse.apply(lambda xx: [x[0] for x in xx])
-    inverse_single_instance_embeddings = [instance_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
-    inverse_single_instance_embeddings = torch.cat(inverse_single_instance_embeddings, dim=0).cpu()
-    inverse_single_author_embeddings = [author_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
-    inverse_single_author_embeddings = torch.cat(inverse_single_author_embeddings, dim=0).cpu()
-    assert len(inverse_single_instance_embeddings) == num_instances
-    assert len(inverse_single_author_embeddings) == num_author
+    if mode == "plagiarism":
+        inverse_single_instance_embeddings = [instance_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
+        inverse_single_instance_embeddings = torch.cat(inverse_single_instance_embeddings, dim=0).cpu()
+        assert len(inverse_single_instance_embeddings) == num_instances
+    else:
+        inverse_single_author_embeddings = [author_fn(inverses) for inverses in tqdm(df.single_inversion.tolist())]
+        inverse_single_author_embeddings = torch.cat(inverse_single_author_embeddings, dim=0).cpu()
+        assert len(inverse_single_author_embeddings) == num_author
 
     if mode == "plagiarism":
         # Instance-Instance:
@@ -210,27 +230,23 @@ def calculate_all(
     return metrics
 
 if __name__ == "__main__":
-    os.makedirs("./metrics", exist_ok=True)
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-    model_names = ["crud"]
-    files = [
-        "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=0.5_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=0.6_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=0.8_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=0.9_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
-        # "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
-    ]
-    for model in model_names:
-        for file in files:
-            print(f"File: {file}")
-            path = os.path.join(base_path, file)
-            metrics_plagiarism = calculate_all(path, mode="plagiarism", model_name=model)
-            metrics_author = calculate_all(path, mode="author", model_name=model)
-            
-            name = file[:-len(".jsonl.vllm_n=100")] + f"_{model}"
-            with open(f"./metrics/{name}_plagiarism.json", "w") as f:
-                json.dump(metrics_plagiarism, f)
-            with open(f"./metrics/{name}_author.json", "w") as f:
-                json.dump(metrics_author, f)
+    metric_dir = "./metrics/new"
+    os.makedirs(metric_dir, exist_ok=True)
+    base_path = "/data1/yubnub/changepoint/MUD_inverse/data"
+    filename = os.path.join(base_path, args.dataset_name, "inverse_output", args.filename)
+
+    if "plagiarism" in args.mode:
+        print("Calculating Plagiarism Metrics")
+        metrics_plagiarism = calculate_all(filename, mode="plagiarism", model_name=args.model_name, debug=args.debug)
+        plagiarism_savename = os.path.join(metric_dir, args.dataset_name, "plagiarism", args.model_name)
+        os.makedirs(plagiarism_savename, exist_ok=True)
+        with open(os.path.join(plagiarism_savename, args.filename), "w") as f:
+            json.dump(metrics_plagiarism, f)
+        
+    if "author" in args.mode:
+        print("Calculating Author Metrics")
+        metrics_author = calculate_all(filename, mode="author", model_name=args.model_name, debug=args.debug)
+        author_savename = os.path.join(metric_dir, args.dataset_name, "author", args.model_name)
+        os.makedirs(author_savename, exist_ok=True)
+        with open(os.path.join(author_savename, args.filename), "w") as f:
+            json.dump(metrics_author, f)
