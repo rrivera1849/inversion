@@ -81,6 +81,8 @@ def create_output_file(
         output_fname += f"_num_examples={args.num_examples}"
     if args.targetted_mode is not None:
         output_fname += f"_targetted_mode={args.targetted_mode}"
+    if "gpt4" in args.filename:
+        output_fname += ".gpt4"
     output_fname += ".debug" if DEBUG else ""
     
     if os.path.exists(output_fname):
