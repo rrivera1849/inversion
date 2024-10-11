@@ -39,8 +39,8 @@ def get_author_embeddings(
     function_kwargs: dict,
     model_name: str,
 ):
-    assert model_name in ["cisr", "sbert", "luar"]
-    if model_name == "luar":
+    assert model_name in ["cisr", "sbert", "mud", "crud"]
+    if model_name == "mud" or model_name == "crud":
         out = get_luar_author_embeddings(text, **function_kwargs)
     else:
         out = get_st_author_embeddings(text, **function_kwargs)
@@ -52,8 +52,8 @@ def get_instance_embeddings(
     function_kwargs: dict,
     model_name: str,
 ):
-    assert model_name in ["cisr", "sbert", "luar"]
-    if model_name == "luar":
+    assert model_name in ["cisr", "sbert", "mud", "crud"]
+    if model_name == "mud" or model_name == "crud":
         out = get_luar_instance_embeddings(text, **function_kwargs)
     else:
         out = get_st_instance_embeddings(text, **function_kwargs)

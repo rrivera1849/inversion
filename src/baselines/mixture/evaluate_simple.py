@@ -3,6 +3,7 @@ import json
 import os
 from functools import partial
 from multiprocessing import Pool
+from argparse import ArgumentParser
 
 import evaluate
 import numpy as np
@@ -10,8 +11,14 @@ import pandas as pd
 import nltk
 from tqdm.auto import tqdm
 
+parser = ArgumentParser()
+parser.add_argument("--filename", type=str, default=None, required=True)
+parser.add_argument("--dataset_name", type=str, default="data.jsonl.filtered.cleaned_kmeans_100")
+parser.add_argument("--debug", action="store_true")
+args = parser.parse_args()
+
 BLEU = evaluate.load("bleu")
-DEBUG = False
+DEBUG = args.debug
 
 def token_f1(
     candidates: list[str], 
@@ -46,21 +53,15 @@ def BLEU_score(
     except ZeroDivisionError:
         return 0.0
 
-def compute_metrics(input, targeted=False):
+def compute_metrics(input):
     _, row = input
-    
     metrics = {}
     metrics["token_f1"] = {}
     metrics["bleu"] = {}
     
-    if targeted:
-        unit = row["unit_x"]
-        rephrase = row["rephrase_x"]
-        inverse = row["inverse"]
-    else:
-        unit = row["unit"]
-        rephrase = row["rephrase"]
-        inverse = row["inverse"]
+    unit = row["unit"]
+    rephrase = row["rephrase"]
+    inverse = row["inverse"]
 
     metrics["token_f1"]["rephrase"] = token_f1([rephrase], [unit])[0]
     inverse_token_f1 = token_f1(inverse, [unit for _ in range(len(inverse))])
@@ -77,89 +78,29 @@ def compute_metrics(input, targeted=False):
     return metrics
 
 def untargeted():
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-    files = [
-        "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.5_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.6_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.8_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.9_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=0.3_top_p=0.9.jsonl.vllm_n=100",
-        "none_6400_temperature=1.5_top_p=0.9.jsonl.vllm_n=100",
-    ]
+    base_path = f"/data1/yubnub/changepoint/MUD_inverse/data/{args.dataset_name}/inverse_output"
+    
+    path = os.path.join(base_path, args.filename)
+    df = pd.read_json(path, lines=True)
     if DEBUG:
-        files = [files[0]]
-    
-    pool = Pool(40)
-    
-    for fname in files:
-        print(f"Processing {fname}")
-        path = os.path.join(base_path, fname)
-        df = pd.read_json(path, lines=True)
-        if DEBUG:
-            df = df.iloc[:10]
-            
+        df = df.iloc[:10]
+        
+    with Pool(40) as pool:
         all_metrics = list(tqdm(pool.imap(compute_metrics, df.iterrows()), total=len(df)))
 
-        avg_metrics = {}
-        avg_metrics["token_f1"] = {}
-        avg_metrics["bleu"] = {}
-        for metric in ["token_f1", "bleu"]:
-            for key in all_metrics[0][metric]:
-                avg_metrics[metric][key] = np.mean([m[metric][key] for m in all_metrics])
-                
-        name = fname[:-len(".jsonl.vllm_n=100")] + "_simple_untargeted"
-        if DEBUG:
-            name += "_debug"
-        with open(f"./metrics/{name}.json", "w") as f:
-            f.write(json.dumps(avg_metrics, indent=4))
-    
-    pool.close()
-    
-def targeted():
-    
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
-    files = [
-        # "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=1",
-        # "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=2",
-        # "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=3",
-        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author",
-        "none_targetted_6400_temperature=0.7_top_p=0.9.jsonln=5.targetted_mode=author",
-    ]
-    if DEBUG:
-        files = [files[0]]
+    avg_metrics = {}
+    avg_metrics["token_f1"] = {}
+    avg_metrics["bleu"] = {}
+    for metric in ["token_f1", "bleu"]:
+        for key in all_metrics[0][metric]:
+            avg_metrics[metric][key] = np.mean([m[metric][key] for m in all_metrics])
 
-    pool = Pool(40)
+    os.makedirs(f"./metrics/new/{args.dataset_name}/basic", exist_ok=True)
+    with open(f"./metrics/new/{args.dataset_name}/basic/{args.filename}", "w") as f:
+        f.write(json.dumps(avg_metrics, indent=4))
     
-    for fname in files:
-        path = os.path.join(base_path, fname)
-        
-        df = pd.read_json(path, lines=True)
-        df = df[df.author_id_x == df.author_id_y]
-        if DEBUG:
-            df = df.iloc[:100]
-
-        fn = partial(compute_metrics, targeted=True)
-        all_metrics = list(tqdm(pool.imap(fn, df.iterrows()), total=len(df)))
-
-        avg_metrics = {}
-        avg_metrics["token_f1"] = {}
-        avg_metrics["bleu"] = {}
-        for metric in ["token_f1", "bleu"]:
-            for key in all_metrics[0][metric]:
-                avg_metrics[metric][key] = np.mean([m[metric][key] for m in all_metrics])
-                
-        name = fname.replace(".jsonl", "") + "_simple_targeted"
-        if DEBUG:
-            name += "_debug"
-        with open(f"./metrics/{name}.json", "w") as f:
-            f.write(json.dumps(avg_metrics, indent=4))
-
-    pool.close()
-            
 
 if __name__ == "__main__":
     os.makedirs("./metrics", exist_ok=True)
 
     untargeted()
-    targeted()

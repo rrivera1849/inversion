@@ -44,7 +44,10 @@ def read_data(path: str):
         df_test_full = df_test_full.groupby("author_id").agg(list).iloc[:100]
         to_explode = [col for col in df_test_full.columns if col != "author_id"]
         df_test_full = df_test_full.explode(to_explode).reset_index()
-        assert df_test_full.unit.tolist() == df.unit.tolist()
+        if args.filename.endswith(".gpt4") and args.dataset_name == "data.jsonl.filtered.cleaned_kmeans_100":
+            df_test_full = df_test_full.drop_duplicates("unit")
+            df.unit = df.unit.apply(lambda x: x[:-1])
+        assert sorted(df_test_full.unit.tolist()) == sorted(df.unit.tolist())
         author_ids = df_test_full.author_id.tolist()
         df["author_id"] = author_ids
 

@@ -1,3 +1,4 @@
+# Targetted Models on All-Pairs
 
 import json
 import os
@@ -125,7 +126,6 @@ if __name__ == "__main__":
         for model in model_names:
             metrics = calculate_all(df, model)
 
-            name = file.replace(".jsonl", "")
-            name += f"_{model}"
-            with open(f"./metrics/{name}_author.json", "w") as f:
+            os.makedirs(f"./metrics/new/data.jsonl.filtered.cleaned_kmeans_100/author", exist_ok=True)
+            with open(f"./metrics/new/data.jsonl.filtered.cleaned_kmeans_100/author/{file}", "w") as f:
                 json.dump(metrics, f)
