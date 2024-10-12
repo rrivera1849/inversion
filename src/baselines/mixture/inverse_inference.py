@@ -79,8 +79,6 @@ def create_output_file(
         output_fname += f".targetted_mode={args.targetted_mode}"
     if args.num_examples is not None:
         output_fname += f"_num_examples={args.num_examples}"
-    if args.targetted_mode is not None:
-        output_fname += f"_targetted_mode={args.targetted_mode}"
     if "gpt4" in args.filename:
         output_fname += ".gpt4"
     output_fname += ".debug" if DEBUG else ""
@@ -327,22 +325,26 @@ def convert_to_targetted_mode(data: list[dict], targetted_mode: str):
     else:
         data = data[["author_id", "rephrase", "unit"]]
         data = data.explode("rephrase").reset_index(drop=True)
-        
+        original_units = []
         j = 0
         current_author = data.iloc[0].author_id
         for index, row in data.iterrows():
             author_id = row["author_id"]
             if author_id != current_author:
                 j = 0
+                current_author = author_id
 
             unit_to_remove = row["unit"][j]
             units_to_keep = [unit for unit in row["unit"] if unit != unit_to_remove]
             units_to_keep = sorted(list(set(units_to_keep)))
             data.at[index, "unit"] = units_to_keep
+            original_units.append(unit_to_remove)
+            
             j += 1
 
         # rename to unit_y and rephrase_x
         data.rename(columns={"rephrase": "rephrase_x", "unit": "unit_y"}, inplace=True)
+        data["original_unit"] = original_units
         return data
 
 def get_num_expected_rows(data: pd.DataFrame, targetted_mode: str):
