@@ -14,26 +14,29 @@ from transformers import (
 from termcolor import colored
 from tqdm import tqdm
 
-from fast_detect_gpt import get_sampling_discrepancy_analytic, get_sampling_discrepancy
-from mixture.model import MixturePredictor
-# from mixture.utils import load_mixture_predictor
-from utils import load_s2orc_MTD_data, compute_metrics, load_model, MODELS, load_author_data, load_inverse_data
+from fast_detect_gpt import get_sampling_discrepancy, get_sampling_discrepancy_analytic
+from utils import load_machine_paraphrase_data, compute_metrics, load_human_paraphrase_data, load_model
 
 parser = ArgumentParser()
-parser.add_argument("--dataset_name", type=str, default="s2orc_MTD",
-                    choices=["author_100", "s2orc_MTD", "inverse"])
+parser.add_argument("--dataset_name", type=str, default="machine_paraphrase",
+                    choices=["machine_paraphrase", "human_paraphrase"])
+parser.add_argument("--filename", type=str, default=None)
 parser.add_argument("--batch_size", type=int, default=32)
-parser.add_argument("--debug", default=False, action="store_true",
-                    help="If True, will process only a few samples.")
+parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
-def get_rank(text, base_model, base_tokenizer, log=False):
+def get_rank(
+    text: list[str], 
+    base_model: AutoModelForCausalLM, 
+    base_tokenizer: AutoTokenizer,
+    log: bool = False,
+):
     """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L298C1-L320C43
     """
     with torch.no_grad():
         tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
         logits = base_model(**tokenized).logits[:,:-1]
-        labels = tokenized["input_ids"][:,1:]
+        labels = tokenized["input_ids"][:, 1:]
 
         # get rank of each label token in the model's likelihood ordering
         matches = (logits.argsort(-1, descending=True) == labels.unsqueeze(-1)).nonzero()
@@ -98,34 +101,6 @@ def get_openai_detector_scores(
     return probs
 
 @torch.no_grad()
-def get_logrank_scores(
-    text: list[str],
-    model_id: str ="openai-community/gpt2-xl",
-) -> list[float]:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    model = AutoModelForCausalLM.from_pretrained(model_id)
-    model.to(device)
-    model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id, 
-        device_map="auto", 
-        torch_dtype=torch.float16,
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-    scores = []
-    for i in tqdm(range(len(text))):
-        try:
-            scores.append(get_rank(text[i], model, tokenizer, log=True))
-        except:
-            scores.append(None)
-
-    return scores
-
-@torch.no_grad()
 def get_RADAR_scores(
     text: list[str],
     batch_size: int = 32,
@@ -155,44 +130,12 @@ def get_RADAR_scores(
     return probabilities
 
 @torch.no_grad()
-def get_mixture_predictor_scores(
-    text: list[str],
-    batch_size: int = 32,
-):  
-    from accelerate import Accelerator
-    model = MixturePredictor()
-    accelerator = Accelerator()
-    model = accelerator.prepare(model)
-    print(colored("Loading STRATIFIED Mixture Predictor", "yellow"))
-    accelerator.load_state("./mixture/outputs/roberta-large_stratified/checkpoints/checkpoint_9/")
-    model.eval()
-    
-    probabilities = []
-    for i in tqdm(range(0, len(text), batch_size)):
-        batch = text[i:i+batch_size]
-        sequence_mixture_preds, _ = model.predict(batch)
-        sequence_mixture_preds = F.log_softmax(sequence_mixture_preds, dim=-1)[:, 1].exp().tolist()
-        probabilities.extend(sequence_mixture_preds)
-    
-    return probabilities
-
-
-@torch.no_grad()
 def get_fast_detect_gpt_scores(
     text: list[str],
-    base_model_id: str = None,
-    reference_model_id: str = None,
-    with_rephrase_prompt=False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if base_model_id is None:
-        base_model, base_tok = load_model()
-    else:
-        base_model, base_tok = load_model(base_model_id)
-        
-    if reference_model_id is not None:
-        reference_model, reference_tok = load_model(reference_model_id)
+    base_model, base_tok = load_model()
 
     scores = []
     for sample in tqdm(text):
@@ -203,90 +146,76 @@ def get_fast_detect_gpt_scores(
             return_tensors="pt", 
         ).to(device)
         base_logits = base_model(**tok).logits[:, :-1]
+        reference_logits = base_logits
         labels = tok["input_ids"][:, 1:]
-        
-        if with_rephrase_prompt:
-            sample_to_rephrase = sample.split()
-            random.shuffle(sample_to_rephrase)
-            sample_to_rephrase = " ".join(sample_to_rephrase)
-            prompt = "Rephrase: {}\nRephrased Passage: ".format(sample_to_rephrase)
-            if reference_model_id is not None:
-                tok = reference_tok(
-                    prompt + sample, 
-                    padding=True,
-                    truncation=True, 
-                    return_tensors="pt", 
-                ).to(device)
-                reference_logits = reference_model(**tok).logits
-            else:
-                tok = base_tok(
-                    prompt + sample, 
-                    padding=True,
-                    truncation=True, 
-                    return_tensors="pt", 
-                ).to(device)
-                reference_logits = base_model(**tok).logits
-            reference_logits = reference_logits[:, -base_logits.size(1)-1:]
-            reference_logits = reference_logits[:, :-1]
-        elif reference_model_id is not None:
-            tok = reference_tok(
-                sample, 
-                padding=True, 
-                truncation=True, 
-                return_tensors="pt", 
-            ).to(device)
-            reference_logits = reference_model(**tok).logits[:, :-1]
-        else:
-            reference_logits = base_logits
-        
         discrepancy = get_sampling_discrepancy(reference_logits, base_logits, labels)
         scores.append(discrepancy)
     return scores
 
+
 def main():
-    if args.dataset_name == "s2orc_MTD":
-        texts, models, prompts = load_s2orc_MTD_data(debug=args.debug, debug_N=50)
-    elif args.dataset_name == "author_100":
-        texts, models, prompts = load_author_data(debug=args.debug, debug_N=50)
-    elif args.dataset_name == "inverse":
-        texts, models, prompts = load_inverse_data(debug=args.debug, debug_N=50)
+    if args.dataset_name == "machine_paraphrase":
+        if args.filename is not None:
+            data = load_machine_paraphrase_data(filename=args.filename, pick_dissimilar=True, debug=args.debug)
+        else:
+            data = load_machine_paraphrase_data(pick_dissimilar=True, debug=args.debug)
+    else:
+        if args.filename is not None:
+            data = load_human_paraphrase_data(filename=args.filename, debug=args.debug)
+        else:
+            data = load_human_paraphrase_data(debug=args.debug)
 
-    scores = get_bino_scores(texts, batch_size=args.batch_size)
-    scores = [-score for score in scores]
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("Binocular metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
+    scores_without = get_fast_detect_gpt_scores(data["without_inverse"]["texts"])
+    metrics_without_inverse = compute_metrics(
+        scores_without, 
+        data["without_inverse"]["models"], 
+        max_fpr=0.01,
+    )
+    print("Without inverse:")
+    print(metrics_without_inverse)
+    
+    scores_with = get_fast_detect_gpt_scores(data["with_inverse"]["texts"])
+    metrics_with_inverse = compute_metrics(
+        scores_with, 
+        data["with_inverse"]["models"], 
+        max_fpr=0.01,
+    )
+    print("With inverse:")
+    print(metrics_with_inverse)
+    
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import roc_curve
+    _ = plt.figure()
 
-    # scores = get_openai_detector_scores(texts, batch_size=args.batch_size)
+    labels = [model != "human" for model in data["without_inverse"]["models"]]
+    fpr, tpr, _ = roc_curve(
+        labels,
+        scores_without, 
+        pos_label=1,
+    )
+    plt.plot(fpr, tpr, label="Human vs Rephrase(Machine)")
+    
+    labels = [model != "human" for model in data["with_inverse"]["models"]]
+    fpr, tpr, _ = roc_curve(
+        labels,
+        scores_with,
+        pos_label=1,
+    )
+    plt.plot(fpr, tpr, label="Human vs Inverse(Rephrase)")
+    plt.xscale("log")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.legend()
+    plt.savefig("./mixture/plots/mtd_roc_curve.pdf")
+    plt.close()
+
+    # scores = get_RADAR_scores(texts, batch_size=args.batch_size)
     # metrics = compute_metrics(scores, models, prompts)
     # print()
-    # print(colored("OpenAI Detector metrics:", "blue"))
+    # print(colored("RADAR metrics:", "blue"))
     # for k, v in metrics.items():
     #     print(colored(f"\t{k}: {v:.4f}", "green"))
-
-    scores = get_RADAR_scores(texts, batch_size=args.batch_size)
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("RADAR metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
     
-    scores = get_mixture_predictor_scores(texts, batch_size=args.batch_size)
-    metrics = compute_metrics(scores, models, prompts)
-    print()
-    print(colored("MixturePredictor metrics:", "blue"))
-    for k, v in metrics.items():
-        print(colored(f"\t{k}: {v:.4f}", "green"))
-
-    # scores = get_fast_detect_gpt_scores(texts)
-    # metrics = compute_metrics(scores, models, prompts, max_fpr=0.1)
-    # print()
-    # print(colored("FastDetectGpt metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
-
 
     return 0
 

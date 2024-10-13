@@ -36,7 +36,7 @@ def get_sampling_discrepancy(logits_ref, logits_score, labels):
     discrepancy = (log_likelihood_x.squeeze(-1) - miu_tilde) / sigma_tilde
     return discrepancy.item()
 
-def get_sampling_discrepancy_analytic(logits_ref, logits_score, labels, reduce=True):
+def get_sampling_discrepancy_analytic(logits_ref, logits_score, labels):
     assert logits_ref.shape[0] == 1
     assert logits_score.shape[0] == 1
     assert labels.shape[0] == 1
@@ -52,10 +52,6 @@ def get_sampling_discrepancy_analytic(logits_ref, logits_score, labels, reduce=T
     log_likelihood = lprobs_score.gather(dim=-1, index=labels).squeeze(-1)
     mean_ref = (probs_ref * lprobs_score).sum(dim=-1)
     var_ref = (probs_ref * torch.square(lprobs_score)).sum(dim=-1) - torch.square(mean_ref)
-    if reduce:
-        discrepancy = (log_likelihood.sum(dim=-1) - mean_ref.sum(dim=-1)) / var_ref.sum(dim=-1).sqrt()
-        discrepancy = discrepancy.mean()
-        return discrepancy.item()
-    else:
-        discrepancy = (log_likelihood - mean_ref) / var_ref.sum(dim=-1).sqrt()
-        return discrepancy
+    discrepancy = (log_likelihood.sum(dim=-1) - mean_ref.sum(dim=-1)) / var_ref.sum(dim=-1).sqrt()
+    discrepancy = discrepancy.mean()
+    return discrepancy.item()
