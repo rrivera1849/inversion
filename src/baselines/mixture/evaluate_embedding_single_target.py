@@ -35,6 +35,10 @@ def flatten(lst: list[list[Any]]) -> list[Any]:
 
 def read_data(path: str):
     df = pd.read_json(path, lines=True)
+    
+    if "unit_y" in df.columns:
+        df.rename(columns={"original_unit": "unit", "rephrase_x": "rephrase"}, inplace=True)
+        df.drop(columns=["unit_y"], inplace=True)
 
     if "author_id" not in df.columns:
         # This is all very unfortunate, but I forgot to save the `author_id` in the 
@@ -51,6 +55,8 @@ def read_data(path: str):
         author_ids = df_test_full.author_id.tolist()
         df["author_id"] = author_ids
 
+    # to sample random LLMs, should be around the same proportion
+    df = df.sample(frac=1., random_state=43)
     df.drop_duplicates("unit", inplace=True)
     return df
 

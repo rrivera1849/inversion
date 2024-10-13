@@ -82,6 +82,10 @@ def untargeted():
     
     path = os.path.join(base_path, args.filename)
     df = pd.read_json(path, lines=True)
+    if "unit_y" in df.columns:
+        df.rename(columns={"original_unit": "unit", "rephrase_x": "rephrase"}, inplace=True)
+        df.drop(columns=["unit_y"], inplace=True)
+
     if DEBUG:
         df = df.iloc[:10]
         
