@@ -16,17 +16,24 @@ from transformers import (
     AutoTokenizer, 
     GenerationConfig, 
     set_seed,
+    T5Tokenizer,
 )
 from tqdm import tqdm
-from vllm import (
-    LLM, 
-    SamplingParams,
-)
+# from vllm import (
+#     LLM, 
+#     SamplingParams,
+# )
 
 from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
     build_inverse_prompt,
 )
+
+# Output2Prompt
+from vec2text import experiments, analyze_utils
+from vec2text.trainers.base import BaseTrainer
+from vec2text.models.config import InversionConfig
+from vec2text.models.my_t5_base import T5SparseEncoder
 
 set_seed(43)
 
@@ -48,6 +55,78 @@ parser.add_argument("--targetted_mode", type=str, default=None,
                     choices=["author", "eval_all"])
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
+
+####################################################################################################
+# Output2Prompt Start
+class Prompt2OutputCollator:
+    def __call__(self, features, return_tensors=None):
+        input_ids = []
+        labels = []
+        names = []
+        questions = []
+        for feature in features:
+            # max 96 * 16 * 10 = 15360 tokens for 24G memory, batch size 4
+            # without sparse, (15360 * 32) ** 0.5 = 700 is the max for batch size 4 
+            shuffle_and_drop = False
+            if shuffle_and_drop:
+                result_list = feature['result_list'][:128]
+                random.shuffle(result_list)
+                result_list = result_list[:32]
+            else:
+                result_list = feature['result_list']
+            input_ids.append(torch.tensor(result_list))
+            labels.append(torch.tensor(feature['system_prompt']))
+            names.append(feature['names'])
+            questions.append(feature['questions'])
+        return {
+            'input_ids': torch.stack(input_ids),
+            'labels': torch.stack(labels),
+            'names': names,
+            'questions': questions
+        }
+    
+class Prompt2OutputTrainer(BaseTrainer):
+    def generate(self, inputs: dict, generation_kwargs: dict) -> torch.Tensor:
+        return self.model.generate(inputs=inputs['input_ids'], generation_config=GenerationConfig(**generation_kwargs))
+
+def load_output2prompt(model_path):
+    # Adapted from: https://github.com/collinzrj/output2prompt/blob/main/main.py#L119
+    with open('prompt2output/config.json') as f:
+        config_dict = json.load(f)
+    config_dict['use_wandb'] = False
+    config_dict['report_to'] = []
+    config_dict['per_device_train_batch_size'] = 8
+    config_dict['per_device_eval_batch_size'] = 8
+    config_dict['gradient_accumulation_steps'] = 1
+    config_dict['eval_steps'] = 9999999999999999999999999 # 500
+    config_dict['experiment'] = 'inversion_from_output_sparse'
+    config_dict["num_train_epochs"] = 1
+    config_dict["warmup_steps"] = 0
+    config = InversionConfig.from_dict(config_dict)
+    mode = 'just_sparse'
+    name = f"train_prompt2output_{mode}"
+    experiment: experiments.InversionFromOutputSparseExperiment = analyze_utils.load_experiment_from_config(
+        name, config=config, use_less_data = -1
+    )
+    experiment.exp_name = name
+    model = T5SparseEncoder.from_pretrained('t5-base')
+    model.config.max_seq_length = 1024
+    model.mode = mode
+    tokenizer: T5Tokenizer = T5Tokenizer.from_pretrained('t5-base')
+    trainer = Prompt2OutputTrainer(
+        model=model,
+        args=experiment.training_args,
+        train_dataset=None,
+        eval_dataset=None,
+        data_collator=Prompt2OutputCollator(),
+    )
+    trainer.tokenizer = tokenizer
+    trainer.embedder_tokenizer = tokenizer
+    trainer.args.metric_for_best_model = None
+    trainer._load_from_checkpoint(model_path)
+    return trainer, tokenizer
+
+####################################################################################################
 
 if args.with_style_embeddings:
     assert not args.vllm, "VLLM does not support `inputs_embeds`"
@@ -74,7 +153,7 @@ def create_output_file(
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
     output_fname += ".jsonl" 
-    output_fname += f".vllm_n={args.num_generations}" if args.vllm else f"n={args.num_generations}"
+    output_fname += f".vllm_n={args.num_generations}" if args.vllm else f".n={args.num_generations}"
     if "targetted" in args.prompt_type:
         output_fname += f".targetted_mode={args.targetted_mode}"
     if args.num_examples is not None:
@@ -96,7 +175,8 @@ def create_output_file(
 def load_inverse_model(
     prompt_type: str = "none",
     vllm: bool = False,
-) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
+    # TODO tuple[LLM, None]
+) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[None, None]]:
     """Loads our inversion model, either with VLLM or without.
     """
     checkpoint_path = os.path.join(
@@ -133,7 +213,8 @@ def load_inverse_model(
 
 def load_style_embedding_projection(
     prompt_type: str = "none",
-) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[LLM, None]]:
+    # TODO tuple[LLM, None]
+) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[None, None]]:
     """Load the Style Emb. Projection layer.
     """
     checkpoint_path = os.path.join(
@@ -165,6 +246,9 @@ def get_prompt_text(
 ) -> list[str]:
     """Generates the prompt text for the inverse model.
     """
+    if args.prompt_type == "output2prompt":
+        return text
+    
     if examples is not None:
         prompt_text = [
             build_inverse_prompt(t, "", examples=e, no_stop_tokens=True) for t, e in zip(text, examples)
@@ -264,17 +348,26 @@ def get_HF_generations(
 
     all_generations = []
     for _ in tqdm(range(args.num_generations)):
-        generations = inverse_model.generate(
-                **tokenized_text,
-                generation_config=generation_config,
-            )
-        generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
+        if args.prompt_type == "output2prompt":
+            generation_kwargs = {"do_sample": True, "temperature": args.temperature, "top_p": args.top_p, "max_length": 128+32}
+            inputs = {"input_ids": tokenized_text["input_ids"].unsqueeze(-1)}
+            generations = inverse_model.generate(inputs, generation_kwargs)
+            generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
+        else:
+            generations = inverse_model.generate(
+                    **tokenized_text,
+                    generation_config=generation_config,
+                )
+            generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
         all_generations.append(generations)
 
     outputs = [[] for _ in range(len(prompt_text))]
     for j in range(len(prompt_text)):
         sample_generations = [all_generations[k][j] for k in range(args.num_generations)]
         for gen in sample_generations:
+            if "output2prompt" in args.prompt_type:
+                outputs[j].append(gen)
+                continue
             if "targetted" not in args.prompt_type:
                 # When providing input embeddings, we only get the output
                 gen = gen[gen.index("Output: ")+len("Output: "):]
@@ -290,7 +383,8 @@ def get_HF_generations(
 
 def get_VLLM_generations(
     prompt_text: list[str],
-    inverse_model: LLM,
+    inverse_model,
+    # inverse_model: LLM,
     generation_args: dict,
 ) -> list[str]:
     sampling_params = SamplingParams(
@@ -439,7 +533,12 @@ def main():
     elif args.with_examples:
         data = data.to_dict(orient="records")
 
-    inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type, args.vllm)
+    if args.prompt_type == "output2prompt":
+        model_path = "/home/riverasoto1/repos/output2prompt/saves/train_prompt2output_just_sparse_2024-10-09_20-32-27/checkpoint-25500"
+        # model_path = "/home/riverasoto1/repos/output2prompt/inverters/chat_prompt_stealing_good"
+        inverse_model, inverse_tokenizer = load_output2prompt(model_path)
+    else:
+        inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type, args.vllm)
 
     generation_args = {
         "temperature": args.temperature,
