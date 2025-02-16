@@ -11,7 +11,7 @@ from datasets import load_from_disk
 from transformers import AutoTokenizer
 from tqdm import tqdm
 
-from utils import get_levenshtein_tags
+from utils import get_levenshtein_tag
 
 random.seed(43)
 

@@ -17,12 +17,12 @@ from termcolor import colored
 from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer,
+    set_seed,
 )
 from trl import (
     SFTConfig, 
     SFTTrainer, 
     DataCollatorForCompletionOnlyLM,
-    set_seed
 )
 
 from embedding_utils import get_luar_instance_embeddings, load_luar_model_and_tokenizer
@@ -80,7 +80,7 @@ MODEL_NAME = "mistralai/Mistral-7B-v0.3"
 
 def get_max_seq_length():
     if args.prompt_type == "none":
-        return 2048 if args.targetted_mode == "examples" else 512
+        return 2048 if args.targetted_mode == "examples" else 1024
     elif args.prompt_type == "tokens":
         return 1024
     else:
@@ -310,7 +310,7 @@ class DataCollatorWithStyleEmbeddings(DataCollatorForCompletionOnlyLM):
         style_embeddings = self.style_emb_proj(style_embeddings).unsqueeze(1)
         # 3. Input = [style_embedding || embeds]
         outputs["inputs_embeds"] = torch.cat((style_embeddings, outputs["inputs_embeds"]), dim=1)
-
+        
         # 5. Shift the labels to the right to account for the style embedding:
         new_label = torch.zeros(B, 1, dtype=torch.long).fill_(-100).to(self.device)
         outputs["labels"] = torch.cat((new_label, outputs["labels"]), dim=1)
@@ -401,7 +401,6 @@ def main():
         eval_dataset=test_samples,
         data_collator=collator,
         formatting_func=form_fn,
-        
     )
     trainer.train(
         resume_from_checkpoint=args.resume_from_checkpoint,

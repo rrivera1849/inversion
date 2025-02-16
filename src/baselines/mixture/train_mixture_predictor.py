@@ -101,13 +101,15 @@ class JSONLDataset(Dataset):
         # In case we're reading from the author dataset:
         if random.random() < 0.5:
             text = sample["unit"]
-            sample["tagger_labels"] = [0] * len(self.tokenizer.tokenize(text))
+            sample["tagger_labels"] = [0] * min(len(self.tokenizer.tokenize(text)), 510)
             sample["label"] = 0
         else:
             text = sample["rephrase"]
-            sample["tagger_labels"] = get_tagger_labels(sample["rephrase"], sample["unit"], self.tokenizer.tokenize)
+            sample["tagger_labels"] = get_tagger_labels(sample["rephrase"], sample["unit"], self.tokenizer.tokenize)[:510]
             sample["label"] = 1
+            
         sample.update(self.tokenizer(text, return_tensors="pt", padding="max_length", max_length=512, truncation=True))
+
         return sample
 
     def __getitem__(self, idx):
@@ -337,9 +339,9 @@ def main():
         accelerator.load_state(args.checkpoint_path)
         print(colored(f"Loaded checkpoint from {args.checkpoint_path}", "green"))
         epoch = int(os.path.basename(args.checkpoint_path).split("_")[1])
-        metadata_fname = list(glob(os.path.join(checkpoints_dir, f"metadata_epoch={epoch:03d}*")))[0]
-        checkpoint = pickle.load(open(metadata_fname, "rb"))
-        best_loss = checkpoint["loss"]
+        # metadata_fname = list(glob(os.path.join(checkpoints_dir, f"metadata_epoch={epoch:03d}*")))[0]
+        # checkpoint = pickle.load(open(metadata_fname, "rb"))
+        # best_loss = checkpoint["loss"]
 
     if args.evaluate_only and accelerator.is_main_process:
         test_dataloader = get_dataloader(

@@ -12,20 +12,19 @@ from metric_utils import calculate_metrics
 from embedding_utils import *
 
 def targeted_similarity_plot(key="inverse_max"):
-    
-    untargeted_fname = "./metrics/none_6400_temperature=0.7_top_p=0.9_luar_plagiarism.json"
+    untargeted_fname = "./metrics/new/data.jsonl.filtered.cleaned_kmeans_100/plagiarism/crud/none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100"
     untargeted = json.loads(open(untargeted_fname).read())
-    similarities = untargeted["inverse_max"]["similarities"]
-    labels = untargeted["inverse_max"]["labels"]
+    similarities = untargeted[key]["similarities"]
+    labels = untargeted[key]["labels"]
     untargeted_true = [sim for sim, label in zip(similarities, labels) if label == 1]
     untargeted_other = [sim for sim, label in zip(similarities, labels) if label == 0]
     
     filenames = [
-        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.vllm_n=5.targetted_mode=author_num_examples=1_luar_author.json",
-        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.vllm_n=5.targetted_mode=author_num_examples=2_luar_author.json",
-        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.vllm_n=5.targetted_mode=author_num_examples=3_luar_author.json",
-        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.vllm_n=5.targetted_mode=author_luar_author.json",
-        "none_targetted_6400_temperature=0.7_top_p=0.9n=5.targetted_mode=author_luar_author.json",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=1",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=2",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author_num_examples=3",
+        "none_targetted=examples_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=5.targetted_mode=author",
+        "none_targetted_6400_temperature=0.7_top_p=0.9.jsonln=5.targetted_mode=author",
     ]
     
     Y_target = []
@@ -43,7 +42,7 @@ def targeted_similarity_plot(key="inverse_max"):
     Y_non_target_90.append(np.percentile(untargeted_other, 90))
     
     for fname in filenames:
-        path = os.path.join("metrics", fname)
+        path = os.path.join("metrics/new/data.jsonl.filtered.cleaned_kmeans_100/author/crud", fname)
         data = json.loads(open(path).read())
         similarities = data[key]["similarities"]
         labels = data[key]["labels"]
@@ -69,9 +68,8 @@ def targeted_similarity_plot(key="inverse_max"):
     _ = plt.figure()
     plt.errorbar(range(N), Y_target, yerr=[Y_target - Y_target_10, Y_target_90 - Y_target], fmt="o", label="True Match")
     plt.errorbar(range(N), Y_non_target, yerr=[Y_non_target - Y_non_target_10, Y_non_target_90 - Y_non_target], fmt="o", label="Other")
-    plt.xticks(range(N), ["Untargeted (Max)", "Targeted (N=1)", "Targeted (N=2)", "Targeted (N=3)", "Targeted (N=All)", "Targeted (Style Emb.)"])
+    plt.xticks(range(N), ["Untargeted (Single)", "Targeted (N=1)", "Targeted (N=2)", "Targeted (N=3)", "Targeted (N=All)", "Targeted (Style Emb.)"])
     plt.xticks(rotation=45)
-    # plt.title("Style Similarity of Targetted and Non-Targetted Examples")
     plt.xlabel("Inversion Method")
     plt.ylabel("Median Style Similarity")
     plt.legend()
@@ -125,8 +123,8 @@ def umap_plot():
     plt.close()
 
 os.makedirs("./plots", exist_ok=True)
-targeted_similarity_plot("inverse_all")
-targeted_similarity_plot("inverse_max")
-targeted_similarity_plot("inverse_expected")
+# targeted_similarity_plot("inverse_all")
+# targeted_similarity_plot("inverse_max")
+# targeted_similarity_plot("inverse_expected")
 targeted_similarity_plot("inverse_single")
 # umap_plot()

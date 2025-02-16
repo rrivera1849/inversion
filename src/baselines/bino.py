@@ -1,63 +1,87 @@
 
 import random; random.seed(43)
+import json
+import os
 import sys
 from argparse import ArgumentParser
+from functools import partial
 
 import torch
 import torch.nn.functional as F
 from binoculars import Binoculars
+from sklearn.metrics import roc_curve
 from transformers import (
     AutoModelForCausalLM, 
     AutoModelForSequenceClassification, 
     AutoTokenizer
 )
-from termcolor import colored
 from tqdm import tqdm
 
 from fast_detect_gpt import get_sampling_discrepancy, get_sampling_discrepancy_analytic
 from utils import load_machine_paraphrase_data, compute_metrics, load_human_paraphrase_data, load_model
 
 parser = ArgumentParser()
-parser.add_argument("--dataset_name", type=str, default="machine_paraphrase",
-                    choices=["machine_paraphrase", "human_paraphrase"])
-parser.add_argument("--filename", type=str, default=None)
+parser.add_argument("--dataset_name", type=str, default="data.jsonl.filtered.respond_reddit.cleaned")
+parser.add_argument("--filename", type=str, default="MTD_all_none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100-with-preds")
+parser.add_argument("--only_inverse", default=False, action="store_true")
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
 def get_rank(
-    text: list[str], 
-    base_model: AutoModelForCausalLM, 
-    base_tokenizer: AutoTokenizer,
+    texts: list[str], 
     log: bool = False,
 ):
     """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L298C1-L320C43
     """
+    base_model = AutoModelForCausalLM.from_pretrained("gpt2-xl")
+    base_model.cuda()
+    base_tokenizer = AutoTokenizer.from_pretrained("gpt2-xl")
+    base_tokenizer.pad_token = base_tokenizer.eos_token
+
     with torch.no_grad():
-        tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
-        logits = base_model(**tokenized).logits[:,:-1]
-        labels = tokenized["input_ids"][:, 1:]
+        result = []
+        for text in tqdm(texts):
+            tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
+            logits = base_model(**tokenized).logits[:,:-1]
+            labels = tokenized["input_ids"][:, 1:]
 
-        # get rank of each label token in the model's likelihood ordering
-        matches = (logits.argsort(-1, descending=True) == labels.unsqueeze(-1)).nonzero()
+            # get rank of each label token in the model's likelihood ordering
+            matches = (logits.argsort(-1, descending=True) == labels.unsqueeze(-1)).nonzero()
 
-        assert matches.shape[1] == 3, f"Expected 3 dimensions in matches tensor, got {matches.shape}"
+            assert matches.shape[1] == 3, f"Expected 3 dimensions in matches tensor, got {matches.shape}"
 
-        ranks, timesteps = matches[:,-1], matches[:,-2]
+            ranks, timesteps = matches[:,-1], matches[:,-2]
 
-        # make sure we got exactly one match for each timestep in the sequence
-        assert (timesteps == torch.arange(len(timesteps)).to(timesteps.device)).all(), "Expected one match per timestep"
+            # make sure we got exactly one match for each timestep in the sequence
+            assert (timesteps == torch.arange(len(timesteps)).to(timesteps.device)).all(), "Expected one match per timestep"
 
-        ranks = ranks.float() + 1 # convert to 1-indexed rank
-        if log:
-            ranks = torch.log(ranks)
+            ranks = ranks.float() + 1 # convert to 1-indexed rank
+            if log:
+                ranks = torch.log(ranks)
 
-        return ranks.float().mean().item()
+            result.append(ranks.float().mean().item())
+            
+    return result
+
+def get_entropy(texts):
+    """From: https://github.com/eric-mitchell/detect-gpt/blob/main/run.py#L324C1-L332C1
+    """
+    base_model = AutoModelForCausalLM.from_pretrained("gpt2-xl")
+    base_tokenizer = AutoTokenizer.from_pretrained("gpt2-xl")
+    result = []
+    with torch.no_grad():
+        for text in tqdm(texts):
+            tokenized = base_tokenizer(text, max_length=1024, truncation=True, return_tensors="pt").to(base_model.device)
+            logits = base_model(**tokenized).logits[:,:-1]
+            neg_entropy = F.softmax(logits, dim=-1) * F.log_softmax(logits, dim=-1)
+            result.append(-neg_entropy.sum(-1).mean().item())
+    return result
     
 @torch.no_grad()
 def get_bino_scores(
     text: list[str],
-    batch_size: int = 32,
+    batch_size: int = 8,
 ) -> list[float]:
     """Compute Bino scores for a list of text
     """
@@ -134,8 +158,7 @@ def get_fast_detect_gpt_scores(
     text: list[str],
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    base_model, base_tok = load_model()
+    base_model, base_tok = load_model("gpt2-xl")
 
     scores = []
     for sample in tqdm(text):
@@ -152,70 +175,62 @@ def get_fast_detect_gpt_scores(
         scores.append(discrepancy)
     return scores
 
-
 def main():
-    if args.dataset_name == "machine_paraphrase":
-        if args.filename is not None:
-            data = load_machine_paraphrase_data(filename=args.filename, pick_dissimilar=True, debug=args.debug)
-        else:
-            data = load_machine_paraphrase_data(pick_dissimilar=True, debug=args.debug)
-    else:
-        if args.filename is not None:
-            data = load_human_paraphrase_data(filename=args.filename, debug=args.debug)
-        else:
-            data = load_human_paraphrase_data(debug=args.debug)
+    data_dirname = "/data1/yubnub/changepoint/MUD_inverse/data"
+    filename = os.path.join(data_dirname, args.dataset_name, "inverse_output", args.filename)
+    data = load_machine_paraphrase_data(filename=filename, pick_dissimilar=True, debug=args.debug)
 
-    scores_without = get_fast_detect_gpt_scores(data["without_inverse"]["texts"])
-    metrics_without_inverse = compute_metrics(
-        scores_without, 
-        data["without_inverse"]["models"], 
-        max_fpr=0.01,
-    )
-    print("Without inverse:")
-    print(metrics_without_inverse)
+    detector_map = {
+        "Binoculars": get_bino_scores,
+        "OpenAI": get_openai_detector_scores,
+        "rank": get_rank,
+        "logrank": partial(get_rank, log=True),
+        "entropy": get_entropy,
+        "RADAR": get_RADAR_scores,
+        "FastDetectGPT": get_fast_detect_gpt_scores,
+    }
+    detector_invert_map = {
+        "Binoculars": True,
+        "OpenAI": False,
+        "rank": True,
+        "logrank": True,
+        "entropy": True,
+        "RADAR": False,
+        "FastDetectGPT": False,
+    }
     
-    scores_with = get_fast_detect_gpt_scores(data["with_inverse"]["texts"])
-    metrics_with_inverse = compute_metrics(
-        scores_with, 
-        data["with_inverse"]["models"], 
-        max_fpr=0.01,
-    )
-    print("With inverse:")
-    print(metrics_with_inverse)
-    
-    import matplotlib.pyplot as plt
-    from sklearn.metrics import roc_curve
-    _ = plt.figure()
+    outputs = {}
+    for detector_name, detector_fn in detector_map.items():
+        for key in data.keys():
+            if args.only_inverse and key != "with_inverse":
+                continue
+            
+            print(key, detector_name)
+            scores = detector_fn(data[key]["texts"])
+            invert_score = detector_invert_map[detector_name]
+            if invert_score:
+                scores = [-s for s in scores]
+            metrics = compute_metrics(
+                scores,
+                data[key]["models"],
+                max_fpr=1.0,
+            )
+            print(key, metrics)
+            labels = [model != "human" for model in data["without_inverse"]["models"]]
+            fpr, tpr, thresholds = roc_curve(labels, scores, pos_label=1)
+            fpr = fpr.tolist()
+            tpr = tpr.tolist()
+            thresholds = thresholds.tolist()
+            
+            outputs[f"{detector_name}-{key}"] = (fpr, tpr, thresholds)
+            outputs[f"{detector_name}-{key}-metrics"] = metrics
 
-    labels = [model != "human" for model in data["without_inverse"]["models"]]
-    fpr, tpr, _ = roc_curve(
-        labels,
-        scores_without, 
-        pos_label=1,
-    )
-    plt.plot(fpr, tpr, label="Human vs Rephrase(Machine)")
-    
-    labels = [model != "human" for model in data["with_inverse"]["models"]]
-    fpr, tpr, _ = roc_curve(
-        labels,
-        scores_with,
-        pos_label=1,
-    )
-    plt.plot(fpr, tpr, label="Human vs Inverse(Rephrase)")
-    plt.xscale("log")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.legend()
-    plt.savefig("./mixture/plots/mtd_roc_curve.pdf")
-    plt.close()
-
-    # scores = get_RADAR_scores(texts, batch_size=args.batch_size)
-    # metrics = compute_metrics(scores, models, prompts)
-    # print()
-    # print(colored("RADAR metrics:", "blue"))
-    # for k, v in metrics.items():
-    #     print(colored(f"\t{k}: {v:.4f}", "green"))
-    
+    savedir = "./mtd_plotting"
+    os.makedirs(savedir, exist_ok=True)
+    savename = "metrics_" + args.dataset_name + "--" + args.filename
+    savename += ".debug" if args.debug else ""
+    with open(os.path.join(savedir, savename), "w+") as fout:
+        fout.write(json.dumps(outputs))
 
     return 0
 

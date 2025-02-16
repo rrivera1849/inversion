@@ -9,7 +9,7 @@ import pandas as pd
 BASE_INSTRUCTION = "The following passage is a mix of human and machine text, recover the original human text:"
 
 def get_rephrase_to_unit():
-    test_file = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
+    test_file = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.respond_reddit.cleaned/test.small.jsonl"
     df = pd.read_json(test_file, lines=True)
     rephrase_to_unit_d = {}
     for _, row in df.iterrows():
@@ -56,30 +56,36 @@ def main():
     os.makedirs("./ready", exist_ok=True)
     rephrase_to_unit_d = get_rephrase_to_unit()
 
-    df = format(rephrase_to_unit_d, "./outputs/inverse_prompts.jsonl.result")
-    df.to_json("./ready/gpt4_inverse.jsonl", orient="records", lines=True)
+    # df = format(rephrase_to_unit_d, "./outputs/inverse_prompts.jsonl.result")
+    # df.to_json("./ready/gpt4_inverse.jsonl", orient="records", lines=True)
 
-    df = format(rephrase_to_unit_d, "./outputs/inverse_in_context_prompts.jsonl.result")
-    df.to_json("./ready/gpt4_inverse_in_context.jsonl", orient="records", lines=True)
+    # df = format(rephrase_to_unit_d, "./outputs/inverse_in_context_prompts.jsonl.result")
+    # df.to_json("./ready/gpt4_inverse_in_context.jsonl", orient="records", lines=True)
 
-    units = []
-    rephrases = []
-    with open("./outputs/rephrase_prompts.jsonl.result") as fin:
-        for line in fin.readlines():
-            record = json.loads(line)
-            prompt = record[0]['messages'][0]['content']
+    # df = format(rephrase_to_unit_d, "./outputs/inverse_in_context_correct_prompts.jsonl.result")
+    # df.to_json("./ready/gpt4_inverse_in_context_correct.jsonl", orient="records", lines=True)
+
+    df = format(rephrase_to_unit_d, "./outputs/inverse_prompts_machine-paraphrase.jsonl.result")
+    df.to_json("./ready/gpt4_inverse_machine-paraphrase.jsonl", orient="records", lines=True)
+
+    # units = []
+    # rephrases = []
+    # with open("./outputs/rephrase_prompts.jsonl.result") as fin:
+    #     for line in fin.readlines():
+    #         record = json.loads(line)
+    #         prompt = record[0]['messages'][0]['content']
             
-            index = prompt.index("\nOnly output the rephrased-passage, do not include any other details.")
-            unit = prompt[:index][len("Rephrase the following passage: "):]
-            rephrase = record[1]['choices'][0]['message']['content']
-            units.append(unit)
-            rephrases.append(rephrase)
+    #         index = prompt.index("\nOnly output the rephrased-passage, do not include any other details.")
+    #         unit = prompt[:index][len("Rephrase the following passage: "):-1]
+    #         rephrase = record[1]['choices'][0]['message']['content']
+    #         units.append(unit)
+    #         rephrases.append(rephrase)
             
-    df = pd.DataFrame({
-        "unit": units,
-        "rephrase": rephrases
-    })
-    df.to_json("./ready/test.small.gpt4.jsonl", orient="records", lines=True)
+    # df = pd.DataFrame({
+    #     "unit": units,
+    #     "rephrase": rephrases
+    # })
+    # df.to_json("./ready/test.small.gpt4.jsonl", orient="records", lines=True)
 
     return 0
 

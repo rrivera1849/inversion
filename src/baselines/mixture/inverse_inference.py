@@ -19,10 +19,10 @@ from transformers import (
     T5Tokenizer,
 )
 from tqdm import tqdm
-# from vllm import (
-#     LLM, 
-#     SamplingParams,
-# )
+from vllm import (
+    LLM, 
+    SamplingParams,
+)
 
 from embedding_utils import load_luar_model_and_tokenizer, get_luar_author_embeddings
 from utils import (
@@ -41,6 +41,7 @@ parser = ArgumentParser()
 parser.add_argument("--dataset_name", type=str, 
                     default="data.jsonl.filtered.cleaned_kmeans_100")
 parser.add_argument("--filename", type=str, default="test.small.jsonl")
+parser.add_argument("--dataset_load_model", type=str, default=None)
 parser.add_argument("--prompt_type", type=str, default="none")
 parser.add_argument("--num", type=int, default=6400)
 parser.add_argument("--temperature", type=float, default=0.7)
@@ -53,6 +54,7 @@ parser.add_argument("--with_examples", default=False, action="store_true")
 parser.add_argument("--num_examples", type=int, default=None)
 parser.add_argument("--targetted_mode", type=str, default=None,
                     choices=["author", "eval_all"])
+parser.add_argument("--postfix", type=str, default="")
 parser.add_argument("--debug", default=False, action="store_true")
 args = parser.parse_args()
 
@@ -148,7 +150,7 @@ def create_output_file(
 ):
     output_fname = os.path.join(
         PROMPTING_DATA_PATH, 
-        f"{args.prompt_type}_{args.num}"
+        args.filename.replace(".jsonl", "") + f"_{args.prompt_type}_{args.num}"
     )
     for name, value in generation_args.items():
         output_fname += f"_{name}={value}"
@@ -161,6 +163,7 @@ def create_output_file(
     if "gpt4" in args.filename:
         output_fname += ".gpt4"
     output_fname += ".debug" if DEBUG else ""
+    output_fname += args.postfix
     
     if os.path.exists(output_fname):
         output_fout = open(output_fname, "a+")
@@ -179,9 +182,10 @@ def load_inverse_model(
 ) -> Union[tuple[AutoModelForCausalLM, AutoTokenizer], tuple[None, None]]:
     """Loads our inversion model, either with VLLM or without.
     """
+    dname = args.dataset_load_model if args.dataset_load_model != "" else args.dataset_name
     checkpoint_path = os.path.join(
         INVERSE_SAVEPATH, 
-        args.dataset_name, 
+        dname, 
         prompt_type, 
         "r=32_alpha=64_dropout=0.1_perc=1.0_perc-gold-labels=0.5", 
         f"checkpoint-{args.num}"
@@ -326,7 +330,7 @@ def get_HF_generations(
     """
     generation_config = GenerationConfig(
         do_sample=True,
-        max_new_tokens=128+32,
+        max_new_tokens=512+32,
         **generation_args,
     )
 
@@ -349,7 +353,7 @@ def get_HF_generations(
     all_generations = []
     for _ in tqdm(range(args.num_generations)):
         if args.prompt_type == "output2prompt":
-            generation_kwargs = {"do_sample": True, "temperature": args.temperature, "top_p": args.top_p, "max_length": 128+32}
+            generation_kwargs = {"do_sample": True, "temperature": args.temperature, "top_p": args.top_p, "max_length": 512+32}
             inputs = {"input_ids": tokenized_text["input_ids"].unsqueeze(-1)}
             generations = inverse_model.generate(inputs, generation_kwargs)
             generations = inverse_tokenizer.batch_decode(generations, skip_special_tokens=True)
@@ -369,27 +373,27 @@ def get_HF_generations(
                 outputs[j].append(gen)
                 continue
             if "targetted" not in args.prompt_type:
-                # When providing input embeddings, we only get the output
                 gen = gen[gen.index("Output: ")+len("Output: "):]
-
-            if "\n#####\n" in gen:
-                gen = gen[:gen.index("\n#####\n")]
-            else:
-                gen = get_best_sentence_substring(gen, text[j])
+            # Stop tokens for our in-house inversion models:
+            gen = gen[:gen.index("\n#####\n")]
             outputs[j].append(gen)
 
     outputs = [list(set(o)) for o in outputs]
     return outputs
 
+
+            # if "\n#####\n" in gen:
+            # else:
+            #     gen = get_best_sentence_substring(gen, text[j])
+
 def get_VLLM_generations(
     prompt_text: list[str],
-    inverse_model,
-    # inverse_model: LLM,
+    inverse_model: LLM,
     generation_args: dict,
 ) -> list[str]:
     sampling_params = SamplingParams(
         n=args.num_generations,
-        max_tokens=128+32,
+        max_tokens=512+32,
         stop="\n#####\n",
         seed=43,
         **generation_args,
@@ -534,8 +538,10 @@ def main():
         data = data.to_dict(orient="records")
 
     if args.prompt_type == "output2prompt":
-        model_path = "/home/riverasoto1/repos/output2prompt/saves/train_prompt2output_just_sparse_2024-10-09_20-32-27/checkpoint-25500"
-        # model_path = "/home/riverasoto1/repos/output2prompt/inverters/chat_prompt_stealing_good"
+        ## output2prompt regular
+        # model_path = "/home/riverasoto1/repos/output2prompt/saves/train_prompt2output_just_sparse_2024-10-09_20-32-27/checkpoint-25500"
+        # output2prompt respond reddit
+        model_path = "/home/riverasoto1/repos/output2prompt/saves/train_prompt2output_just_sparse_2024-11-23_09-04-43/checkpoint-29900"
         inverse_model, inverse_tokenizer = load_output2prompt(model_path)
     else:
         inverse_model, inverse_tokenizer = load_inverse_model(args.prompt_type, args.vllm)

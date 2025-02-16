@@ -15,6 +15,7 @@ parser = ArgumentParser()
 parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
                     choices=["mistralai/Mistral-7B-Instruct-v0.3", "meta-llama/Meta-Llama-3-8B-Instruct", "microsoft/Phi-3-mini-4k-instruct"])
 parser.add_argument("--in_context", action="store_true")
+parser.add_argument("--num_examples", type=int, default=100)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
@@ -86,7 +87,7 @@ def main():
         temperature=0.7,
         top_p=0.9,
         max_tokens=128+32,
-        n=100 if not args.in_context else 5,
+        n=args.num_examples,
     )
 
     inversions = []
@@ -102,7 +103,7 @@ def main():
         "inverse_prompt": prompts,
     })
 
-    save_df.to_json(f"./baseline_results/baseline_{model_basename}_in-context={args.in_context}.jsonl", lines=True, orient="records")
+    save_df.to_json(f"./baseline_results/baseline_{model_basename}_in-context={args.in_context}_n={args.num_examples}.jsonl", lines=True, orient="records")
 
     return 0
 

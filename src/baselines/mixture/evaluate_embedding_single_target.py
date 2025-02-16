@@ -45,6 +45,9 @@ def read_data(path: str):
         # small test set I saved, here we are recovering it:
         path_test_full = f"/data1/yubnub/changepoint/MUD_inverse/data/{args.dataset_name}/test.jsonl"
         df_test_full = pd.read_json(path_test_full, lines=True)
+        if "baseline" in args.filename:
+            model_name = args.filename.split("_")[1]
+            df_test_full = df_test_full[df_test_full.model_name == model_name]
         df_test_full = df_test_full.groupby("author_id").agg(list).iloc[:100]
         to_explode = [col for col in df_test_full.columns if col != "author_id"]
         df_test_full = df_test_full.explode(to_explode).reset_index()

@@ -16,6 +16,74 @@ from mixture.embedding_utils import *
 INVERSE_DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
 
 def load_machine_paraphrase_data(
+    filename: str = "MTD_all_none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100-with-preds",
+    pick_dissimilar: bool = False,
+    debug: bool = False,
+):
+    data = {}
+    total = 1_500 if not debug else 100
+    
+    fname = os.path.join(
+        INVERSE_DATA_PATH,
+        "data.jsonl.filtered.respond_reddit.cleaned",
+        "inverse_output",
+        filename,
+    )
+    df = pd.read_json(fname, lines=True)
+    df = df.sample(frac=1., random_state=43).reset_index(drop=True)
+    df = df.iloc[:total]
+    
+    data["without_inverse"] = {
+        "texts": df.rephrase.tolist(),
+        "models": ["machine" if type_ == True else "human" for type_ in df.is_machine.tolist()]
+    }
+    
+    if pick_dissimilar:
+        inverse = df.inverse.tolist()
+        luar, luar_tok = load_luar_model_and_tokenizer("rrivera1849/LUAR-CRUD")
+        luar.to("cuda")
+        embeddings_inverse = [get_luar_instance_embeddings(inv, luar, luar_tok, normalize=True) for inv in tqdm(inverse)]
+        embeddings_rephrase = get_luar_instance_embeddings(df.rephrase.tolist(), luar, luar_tok, normalize=True)
+
+        indices = []
+        for j in range(total):
+            emb = embeddings_rephrase[j:j+1]
+            emb = emb.repeat(embeddings_inverse[j].size(0), 1)
+            similarities = util.pytorch_cos_sim(emb, embeddings_inverse[j]).diag().cpu().tolist()
+            minsim = min(similarities)
+            min_index = similarities.index(minsim)
+            indices.append(min_index)
+
+        inverse = [inverse[i][indices[i]] for i in range(total)]
+    else:
+        inverse = df.inverse.tolist()
+        inverse = [j[0] for i in inverse for j in i]
+
+    texts, models = [], []
+    i = 0
+    for use_inverse, is_machine in zip(df["use_inverse"].tolist(), df["is_machine"].tolist()):
+        if use_inverse:
+        # if is_machine:
+            texts.append(inverse[i])
+        else:
+            texts.append(df.iloc[i]["rephrase"])
+        label = "human" if not is_machine else "machine"
+        models.append(label)
+        i += 1
+    assert i == len(inverse) == len(df)
+    data["with_inverse"] = {
+        "texts": texts,
+        "models": models,
+    }
+    
+    # data["all_inverse"] = {
+    #     "texts": inverse,
+    #     "models": ["machine" if type_ == True else "human" for type_ in df.is_machine.tolist()],
+    # }
+
+    return data
+
+def load_machine_paraphrase_data_old(
     filename: str = "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100",
     pick_dissimilar: bool = False,
     debug: bool = False,
@@ -54,7 +122,7 @@ def load_machine_paraphrase_data(
         "texts": texts,
         "models": models,
     }
-
+    
     if pick_dissimilar:
         inverse = df.inverse.tolist()
         luar, luar_tok = load_luar_model_and_tokenizer("rrivera1849/LUAR-CRUD")

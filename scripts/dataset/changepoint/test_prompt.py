@@ -44,9 +44,9 @@ parser.add_argument("--debug", action="store_true",
 args = parser.parse_args()
 
 DATASET = pd.read_json(args.dataset_path, lines=True)
-DATASET.rename(columns={"syms": "unit"}, inplace=True)
-to_expode = [col for col in DATASET.columns if col != "author_id"]
-DATASET = DATASET.explode(to_expode).reset_index(drop=True)
+# DATASET.rename(columns={"syms": "unit"}, inplace=True)
+# to_expode = [col for col in DATASET.columns if col != "author_id"]
+# DATASET = DATASET.explode(to_expode).reset_index(drop=True)
 
 PROMPT = get_prompt(args.prompt_type)
 model = LLM(args.model_name)
