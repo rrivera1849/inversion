@@ -10,7 +10,7 @@ from termcolor import colored
 from tqdm.auto import tqdm
 tqdm.pandas()
 
-DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics/"
+DATA_PATH = "/data1/foobar/data/iur_dataset/author_100.politics/"
 
 print(colored("This is only reading mistral generations right now!", "red"))
 

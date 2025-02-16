@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 seed = 43
 N = 100
-TEST_DATA_PATH = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/test_clean_and_joined"
+TEST_DATA_PATH = "/data1/foobar/changepoint/s2orc_changepoint/unit_128/test_clean_and_joined"
 
 random.seed(seed)
 

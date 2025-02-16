@@ -109,9 +109,9 @@ def read_dataset(
     """Reads the dataset from the S2ORC or RAID combined dataset.
     """
     if from_s2orc:
-        dirname = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
+        dirname = "/data1/foobar/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
     else:
-        dirname = "/data1/yubnub/changepoint/RAID_rephrase/train_human_unit_128_clean_and_joined"
+        dirname = "/data1/foobar/changepoint/RAID_rephrase/train_human_unit_128_clean_and_joined"
     
     dataset = load_from_disk(dirname)
     if args.debug:

@@ -176,7 +176,7 @@ def get_fast_detect_gpt_scores(
     return scores
 
 def main():
-    data_dirname = "/data1/yubnub/changepoint/MUD_inverse/data"
+    data_dirname = "/data1/foobar/changepoint/MUD_inverse/data"
     filename = os.path.join(data_dirname, args.dataset_name, "inverse_output", args.filename)
     data = load_machine_paraphrase_data(filename=filename, pick_dissimilar=True, debug=args.debug)
 

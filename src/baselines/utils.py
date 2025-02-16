@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from mixture.embedding_utils import *
 
-INVERSE_DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
+INVERSE_DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data"
 
 def load_machine_paraphrase_data(
     filename: str = "MTD_all_none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100-with-preds",

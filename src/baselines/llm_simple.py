@@ -35,7 +35,7 @@ random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    default="/data1/foobar/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--prompt", type=str, default="none",
                     help="Which prompt-type to train on. If 'all', will train a single model on all types.")
@@ -192,7 +192,7 @@ def main():
     print(colored(f"len(test_samples)={len(test_samples)}", "blue"))
     
     # run_name = f"Mistral-7B-v0.3-QLoRA-prompt={args.prompt}-perc={args.units_perc_per_sample}-ns={args.num_samples}-debug={args.debug}"
-    # output_dir = os.path.join("/scratch1/yubnub/changepoint/output", run_name)
+    # output_dir = os.path.join("/scratch1/foobar/changepoint/output", run_name)
     # os.makedirs(output_dir, exist_ok=True)
 
     peft_model.config.use_cache = False
