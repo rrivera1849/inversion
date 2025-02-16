@@ -12,7 +12,7 @@ tqdm.pandas()
 
 DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics/"
 
-print(colored("RRS - This is only reading mistral generations right now!", "red"))
+print(colored("This is only reading mistral generations right now!", "red"))
 
 def clean_and_join(
     split_fname: str, 

@@ -18,7 +18,6 @@ random.seed(seed)
 def main():
     samples = []
     dataset = load_from_disk(TEST_DATA_PATH)
-    # RRS - 10k should be enough for us to get the data we need:
     K = 10_000
     print("Reading data...")
     for i in tqdm(range(K)):

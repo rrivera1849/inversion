@@ -165,7 +165,6 @@ def process_sample(
     original_text = sample["units"]
         
     # Sample the Negative (human) samples:
-    # RRS - no negative samples when trying to invert:
     if not is_inverse_data:    
         if from_s2orc:
             K = int(args.perc_s2orc * len(original_text))

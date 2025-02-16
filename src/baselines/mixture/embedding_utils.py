@@ -30,7 +30,6 @@ def load_luar_model_and_tokenizer(
 ) -> tuple[AutoModel, AutoTokenizer]:
     luar = AutoModel.from_pretrained(HF_id, trust_remote_code=True)
     luar.eval()
-    # RRS - Avoid HF library issue when loading tokenizer:
     luar_tok = AutoTokenizer.from_pretrained("sentence-transformers/paraphrase-distilroberta-base-v1")
     return (luar, luar_tok)
 

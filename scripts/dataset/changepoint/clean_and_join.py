@@ -217,7 +217,6 @@ def main():
         return 0
 
     all_generations = clean_all_generations()
-    # RRS - don't switch the order of the next two lines!
     columns_to_add = get_columns_to_add(all_generations)
     dataset = dataset.select(all_generations[0].dataset_index.tolist())
     if "changepoint_indices" in dataset.column_names:
