@@ -29,7 +29,7 @@ def count_num_tokens(text: str) -> int:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_data_file', type=str,
-                        default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined")
+                        default="/data1/foobar/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined")
     parser.add_argument('--output_data_file', type=str,
                         default="./s2orc_hard_positives.jsonl")
     parser.add_argument(

@@ -19,7 +19,7 @@ from utils import load_s2orc_MTD_data
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    default="/data1/foobar/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
 args = parser.parse_args()
 

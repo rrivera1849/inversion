@@ -31,7 +31,7 @@ from utils import build_inverse_prompt
 torch.autograd.set_detect_anomaly(True)
 
 set_seed(43)
-OUTPUT_DIR = "/data1/yubnub/changepoint/models/inverse"
+OUTPUT_DIR = "/data1/foobar/changepoint/models/inverse"
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str,

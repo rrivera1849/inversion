@@ -6,7 +6,7 @@ import evaluate
 
 BLEU = evaluate.load("bleu")
 
-DATA_DIR = "/data1/yubnub/changepoint/MUD_inverse/data/abstracts/inverse_output"
+DATA_DIR = "/data1/foobar/changepoint/MUD_inverse/data/abstracts/inverse_output"
 fname = "test_final_none_3000_temperature=0.7_top_p=0.9.jsonl.vllm_n=100"
 path = os.path.join(DATA_DIR, fname)
 

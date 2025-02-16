@@ -15,7 +15,7 @@ np.random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    default="/data1/foobar/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--debug", default=False, action="store_true",
                     help="Work on the debug split.")

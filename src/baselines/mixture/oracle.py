@@ -11,7 +11,7 @@ from utils import get_levenshtein_tags
 
 random.seed(43)
 
-DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
+DATA_PATH = "/data1/foobar/data/iur_dataset/author_100.politics"
 
 tokenizer = AutoTokenizer.from_pretrained("roberta-large")
 split_names = ["train", "valid", "test"]

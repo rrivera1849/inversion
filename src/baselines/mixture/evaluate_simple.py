@@ -78,7 +78,7 @@ def compute_metrics(input):
     return metrics
 
 def untargeted():
-    base_path = f"/data1/yubnub/changepoint/MUD_inverse/data/{args.dataset_name}/inverse_output"
+    base_path = f"/data1/foobar/changepoint/MUD_inverse/data/{args.dataset_name}/inverse_output"
     
     path = os.path.join(base_path, args.filename)
     df = pd.read_json(path, lines=True)

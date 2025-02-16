@@ -17,7 +17,7 @@ random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/RAID_rephrase/train_human_unit_128",
+                    default="/data1/foobar/changepoint/RAID_rephrase/train_human_unit_128",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--model_name", type=str, default="mistralai/Mistral-7B-Instruct-v0.3",
                     choices=["mistralai/Mistral-7B-Instruct-v0.3", 

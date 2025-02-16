@@ -5,8 +5,8 @@ import os
 import numpy as np
 from sklearn.metrics import euclidean_distances
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100"
-EMBEDDINGS_PATH = "/data1/yubnub/changepoint/MUD_inverse/embeddings/data.jsonl.filtered.cleaned_LUAR-MUD"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100"
+EMBEDDINGS_PATH = "/data1/foobar/changepoint/MUD_inverse/embeddings/data.jsonl.filtered.cleaned_LUAR-MUD"
 
 cluster_centers = np.load(os.path.join(DATA_PATH, "cluster_centers.npy"))
 

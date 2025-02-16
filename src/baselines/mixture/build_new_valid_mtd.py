@@ -3,7 +3,7 @@ import os
 
 import pandas as pd
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse"
 
 def main():
     valid_df = pd.read_json(os.path.join(DATA_PATH, "data/data.jsonl.filtered.respond_reddit.cleaned/valid.jsonl"), lines=True)

@@ -10,7 +10,7 @@ from utils import load_mixture_predictor, get_mixture_weights
 
 parser = ArgumentParser()
 parser.add_argument("--dataset_path", type=str, 
-                    default="/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100")
+                    default="/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100")
 parser.add_argument("--mixture_predictor_path", type=str,
                     default="./outputs/MUD_politics_perc=0.5/checkpoints/checkpoint_1",
                     help="Path to the mixture predictor model.")

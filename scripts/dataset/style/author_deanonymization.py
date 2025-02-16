@@ -36,7 +36,7 @@ def filter_by_lengths(row):
     return row
 
 def main():
-    base_path = "/data1/yubnub/data/iur_dataset"
+    base_path = "/data1/foobar/data/iur_dataset"
 
     dirname = "author_100" + SUFFIX
     os.makedirs(os.path.join(base_path, dirname), exist_ok=True)

@@ -6,15 +6,15 @@ from tqdm import tqdm
 
 # paths to the PAN23 datasets TODO
 PAN23_train_paths = {
-    "easy": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset1/pan23-multi-author-analysis-dataset1-train",
-    "medium": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset2/pan23-multi-author-analysis-dataset2-train",
-    "hard": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset3/pan23-multi-author-analysis-dataset3-train",
+    "easy": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset1/pan23-multi-author-analysis-dataset1-train",
+    "medium": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset2/pan23-multi-author-analysis-dataset2-train",
+    "hard": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset3/pan23-multi-author-analysis-dataset3-train",
 }
 
 PAN23_validation_paths = {
-    "easy": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset1/pan23-multi-author-analysis-dataset1-validation",
-    "medium": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset2/pan23-multi-author-analysis-dataset2-validation",
-    "hard": "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset3/pan23-multi-author-analysis-dataset3-validation",
+    "easy": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset1/pan23-multi-author-analysis-dataset1-validation",
+    "medium": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset2/pan23-multi-author-analysis-dataset2-validation",
+    "hard": "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset3/pan23-multi-author-analysis-dataset3-validation",
 }
 
 def read_PAN_dataset(path):

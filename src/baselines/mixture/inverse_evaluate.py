@@ -163,7 +163,7 @@ def token_f1(
 
 def main():
     metrics = {}
-    dataset_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
+    dataset_path = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
     for filename in os.listdir(dataset_path):
         path = os.path.join(dataset_path, filename)
         # if not path.endswith(".jsonl"):

@@ -22,7 +22,7 @@ def load_model():
     accelerator.load_state(state_path)
     return model
 
-DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics/"
+DATA_PATH = "/data1/foobar/data/iur_dataset/author_100.politics/"
 model = load_model()
 
 # for fname in glob(os.path.join(DATA_PATH, "*mistral*")):

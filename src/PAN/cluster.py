@@ -68,7 +68,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_name = "uar"
-    LUAR_id = "/data1/yubnub/pretrained_weights/LUAR/LUAR-IUR"
+    LUAR_id = "/data1/foobar/pretrained_weights/LUAR/LUAR-IUR"
     print(f"Loading: {LUAR_id}")
     model = AutoModel.from_pretrained(LUAR_id, trust_remote_code=True)
     model.to(device)

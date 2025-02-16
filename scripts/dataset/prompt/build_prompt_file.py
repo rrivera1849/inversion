@@ -57,9 +57,9 @@ def write(records, output_file):
         for record in records:
             f.write(json.dumps(record) + "\n")
 
-# file_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
+# file_path = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
 # MACHINE
-file_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.respond_reddit.cleaned/inverse_output/test.small.jsonl"
+file_path = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.respond_reddit.cleaned/inverse_output/test.small.jsonl"
 endpoint = "https://api.openai.com/v1/chat/completions"
 os.makedirs("./outputs", exist_ok=True)
 

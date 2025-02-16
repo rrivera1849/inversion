@@ -6,7 +6,7 @@ from multiprocessing import Pool
 import pandas as pd
 from tqdm import tqdm
 DATA_FNAME = "/home/riverasoto1/repos/raid/data/raid.jsonl"
-SAVEDIR = "/data1/yubnub/changepoint/MUD_inverse/data"
+SAVEDIR = "/data1/foobar/changepoint/MUD_inverse/data"
 
 df = pd.read_json(DATA_FNAME, lines=True)
 pool = Pool(40)

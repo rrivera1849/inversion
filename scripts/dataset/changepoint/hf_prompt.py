@@ -15,7 +15,7 @@ random.seed(43)
 
 parser = ArgumentParser()
 parser.add_argument("--dirname", type=str,
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/unit_128",
+                    default="/data1/foobar/changepoint/s2orc_changepoint/unit_128",
                     help="Directory where the dataset is stored.")
 parser.add_argument("--model_name", type=str, default="google/gemma-7b-it",
                     choices=["google/gemma-7b-it", "mistralai/Mistral-7B-Instruct-v0.3", 

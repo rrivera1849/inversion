@@ -136,13 +136,13 @@ if args.with_style_embeddings:
 DEBUG = args.debug
 
 BATCH_SIZE = args.batch_size
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data"
 assert os.path.isdir(os.path.join(DATA_PATH, args.dataset_name))
 
 PROMPTING_DATA_PATH = os.path.join(DATA_PATH, args.dataset_name, "inverse_output")
 os.makedirs(PROMPTING_DATA_PATH, exist_ok=True)
 
-INVERSE_SAVEPATH = "/data1/yubnub/changepoint/models/inverse"
+INVERSE_SAVEPATH = "/data1/foobar/changepoint/models/inverse"
 NLP = spacy.load("en_core_web_sm")
 
 def create_output_file(

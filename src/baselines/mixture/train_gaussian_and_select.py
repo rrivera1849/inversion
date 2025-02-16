@@ -10,7 +10,7 @@ from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
 tqdm.pandas()
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data/"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data/"
 
 def train_gmm(
     human_scores: list[int],

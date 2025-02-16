@@ -21,7 +21,7 @@ args = parser.parse_args()
 
 np.random.seed(43)
 
-BASE_DIR = "/data1/yubnub/changepoint/MUD_inverse"
+BASE_DIR = "/data1/foobar/changepoint/MUD_inverse"
 DATA_DIR = os.path.join(BASE_DIR, "data")
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")
 RAW_DATA_DIR = os.path.join(BASE_DIR, "raw")

@@ -6,7 +6,7 @@ import pandas as pd
 from datasets import load_from_disk
 
 N = 100
-TEST_DATASET_PATH = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/test_clean_and_joined"
+TEST_DATASET_PATH = "/data1/foobar/changepoint/s2orc_changepoint/unit_128/test_clean_and_joined"
 
 def main():
     dataset = load_from_disk(TEST_DATASET_PATH)

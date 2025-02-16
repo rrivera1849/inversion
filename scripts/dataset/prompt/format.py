@@ -9,7 +9,7 @@ import pandas as pd
 BASE_INSTRUCTION = "The following passage is a mix of human and machine text, recover the original human text:"
 
 def get_rephrase_to_unit():
-    test_file = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.respond_reddit.cleaned/test.small.jsonl"
+    test_file = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.respond_reddit.cleaned/test.small.jsonl"
     df = pd.read_json(test_file, lines=True)
     rephrase_to_unit_d = {}
     for _, row in df.iterrows():

@@ -6,12 +6,12 @@ import sys
 import pandas as pd
 
 def get_test_authors():
-    path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
+    path = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
     authors = [json.loads(line)["author_id"] for line in open(path)]
     return list(set(authors))
 
 def main():
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data"
+    base_path = "/data1/foobar/changepoint/MUD_inverse/data"
     dataset_name = sys.argv[1]
     assert os.path.isdir(os.path.join(base_path, dataset_name)), f"Dataset {dataset_name} not found"
 

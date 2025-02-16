@@ -20,7 +20,7 @@ else:
     rephrase_key = "rephrase"
     new_unit_column = False
 
-DIRNAME = "/data1/yubnub/changepoint/MUD_inverse/raw/generations"
+DIRNAME = "/data1/foobar/changepoint/MUD_inverse/raw/generations"
 DEBUG = False
 nrows = 100 if DEBUG else None
 filenames = os.listdir(DIRNAME)

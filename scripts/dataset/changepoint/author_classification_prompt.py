@@ -45,7 +45,7 @@ args = parser.parse_args()
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["TIKTOKEN_CACHE_DIR"] = "/tmp/riverasoto1"
 
-with open(f"/data1/yubnub/data/iur_dataset/author_100.politics/{args.split_name}.jsonl", "r") as f:
+with open(f"/data1/foobar/data/iur_dataset/author_100.politics/{args.split_name}.jsonl", "r") as f:
     DATASET = [json.loads(line) for line in f.readlines()]
 PROMPT = get_prompt("rephrase")
 
@@ -120,7 +120,7 @@ def get_generations(prompts, sub_batch_size=1):
 dataset_name = "{}_{}_prompt=rephrase_temperature={}_top_p={}.jsonl".format(
     args.split_name, args.model_name.split("/")[1], args.temperature, args.top_p
 )
-savename = f"/data1/yubnub/data/iur_dataset/author_100.politics/generations/{dataset_name}"
+savename = f"/data1/foobar/data/iur_dataset/author_100.politics/generations/{dataset_name}"
 os.makedirs(os.path.dirname(savename), exist_ok=True)
 if os.path.isfile(savename):
     fout = open(savename, "a+")

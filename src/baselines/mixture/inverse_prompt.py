@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from utils import get_levenshtein_tags, get_mixture_weights, load_mixture_predictor
 
-DIRNAME = "/data1/yubnub/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
+DIRNAME = "/data1/foobar/changepoint/s2orc_changepoint/unit_128/train_clean_and_joined"
 SAVE_DIRNAME = "./prompting_data"
 
 REPHRASE_PROMPT="""Rephrase the following passage: {}

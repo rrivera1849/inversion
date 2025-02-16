@@ -78,7 +78,7 @@ def targeted_similarity_plot(key="inverse_max"):
     plt.close()
     
 def umap_plot():
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
+    base_path = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output"
     untargeted = os.path.join(base_path, "none_6400_temperature=0.7_top_p=0.9.jsonl.vllm_n=100")
     targeted = os.path.join(base_path, "none_targetted_6400_temperature=0.7_top_p=0.9.jsonln=5.targetted_mode=author")
 

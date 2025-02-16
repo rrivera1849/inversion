@@ -19,7 +19,7 @@ parser.add_argument("--num_examples", type=int, default=100)
 parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
 
-TEST_FPATH = "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
+TEST_FPATH = "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/inverse_output/test.small.jsonl"
 
 def build_inverse_prompt_gpt4(
     generation: str,

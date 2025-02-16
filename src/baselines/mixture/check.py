@@ -43,7 +43,7 @@ def main():
             "domain": [],
         }
         
-        raid = load_from_disk("/data1/yubnub/changepoint/RAID_rephrase/train_human_unit_128_clean_and_joined")
+        raid = load_from_disk("/data1/foobar/changepoint/RAID_rephrase/train_human_unit_128_clean_and_joined")
         raid_df = raid.to_pandas()
         for domain in raid_df.domain.unique():
             print("domain:", domain)
@@ -58,7 +58,7 @@ def main():
             records["unit"].extend(raid_df_domain.units.tolist())
             records["domain"].extend(raid_df_domain.domain.tolist())
 
-        s2orc = load_from_disk("/data1/yubnub/changepoint/s2orc_changepoint/unit_128/test")
+        s2orc = load_from_disk("/data1/foobar/changepoint/s2orc_changepoint/unit_128/test")
         index = 0
         to_sample = 100
         while to_sample > 0:

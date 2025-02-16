@@ -4,7 +4,7 @@ import sys
 
 import pandas as pd
 
-DATA_DIR = "/data1/yubnub/changepoint/MUD_inverse/data/"
+DATA_DIR = "/data1/foobar/changepoint/MUD_inverse/data/"
 
 domain_name = sys.argv[1]
 

@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from model import MixturePredictor
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data/"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data/"
 
 def main():
     experiment_id = sys.argv[1]

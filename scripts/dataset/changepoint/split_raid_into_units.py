@@ -12,7 +12,7 @@ if len(sys.argv) > 1:
 else:
     num_max_tokens = 128
 
-path = "/data1/yubnub/changepoint/RAID_rephrase/train_human.jsonl"
+path = "/data1/foobar/changepoint/RAID_rephrase/train_human.jsonl"
 dataset = pd.read_json(path, lines=True)
 dataset = Dataset.from_pandas(dataset)
 split_fn = partial(

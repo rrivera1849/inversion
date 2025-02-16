@@ -11,7 +11,7 @@ from transformers import (
 )
 from nltk.tokenize import sent_tokenize
 
-DATA_DIR = "/data1/yubnub/changepoint/MUD_inverse/data/"
+DATA_DIR = "/data1/foobar/changepoint/MUD_inverse/data/"
 
 class DipperParaphraser(object):
     def __init__(self, model="kalpeshk2011/dipper-paraphraser-xxl", verbose=True):

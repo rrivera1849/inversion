@@ -80,8 +80,8 @@ def read_best_score_dataset(dataset_path):
     return embeddings, labels
 
 def main():
-    train_path = "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset3/train_best_performance_scores.jsonl"
-    validation_path = "/data1/yubnub/changepoint/pan23/pan23-multi-author-analysis-dataset3/validation_best_performance_scores.jsonl"
+    train_path = "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset3/train_best_performance_scores.jsonl"
+    validation_path = "/data1/foobar/changepoint/pan23/pan23-multi-author-analysis-dataset3/validation_best_performance_scores.jsonl"
     
     # I want to bin the labels into 10 bins and make this a classification task
     train_embeddings, train_labels = read_best_score_dataset(train_path)

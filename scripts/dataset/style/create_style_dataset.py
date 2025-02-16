@@ -26,8 +26,8 @@ def split_queries_and_targets(
 
 def main():
     # TODO
-    path = "/data1/yubnub/changepoint/s2orc_changepoint/author_unit_128"
-    save_dirname = "/data1/yubnub/data/s2orc/"
+    path = "/data1/foobar/changepoint/s2orc_changepoint/author_unit_128"
+    save_dirname = "/data1/foobar/data/s2orc/"
     os.makedirs(save_dirname, exist_ok=True)
     
     dataset = load_from_disk(os.path.join(path, "train"))

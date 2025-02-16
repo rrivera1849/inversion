@@ -28,7 +28,7 @@ parser.add_argument("--token_mixture_multiplier", type=float, default=1.0)
 parser.add_argument("--seed", type=int, default=43)
 args = parser.parse_args()
 
-DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
+DATA_PATH = "/data1/foobar/data/iur_dataset/author_100.politics"
 
 class BoostUp(nn.Module):
     def __init__(self):

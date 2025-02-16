@@ -9,9 +9,9 @@ from termcolor import colored
 
 # splitname we want to copy:
 SPLIT_FILENAME = \
-    "/data1/yubnub/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/splitname_to_author_ids.json"
+    "/data1/foobar/changepoint/MUD_inverse/data/data.jsonl.filtered.cleaned_kmeans_100/splitname_to_author_ids.json"
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data"
 
 def main():
     split_to_author_ids = json.load(open(SPLIT_FILENAME))

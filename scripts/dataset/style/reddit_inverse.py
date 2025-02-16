@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 random.seed(43)
 hf_logging.set_verbosity_error()
-MUD_PATH = "/data1/yubnub/data/raw_all/data.jsonl.crud.filtered"
+MUD_PATH = "/data1/foobar/data/raw_all/data.jsonl.crud.filtered"
 TOKENIZER = AutoTokenizer.from_pretrained("roberta-large")
 CHUNKSIZE = 10_000
 DEBUG = False
@@ -45,7 +45,7 @@ def filter(data: dict) -> Union[dict, None]:
 
 def main():
     
-    fout = open("/data1/yubnub/changepoint/MUD_inverse/raw/data.jsonl.crud.filtered", "w+")
+    fout = open("/data1/foobar/changepoint/MUD_inverse/raw/data.jsonl.crud.filtered", "w+")
     with open(MUD_PATH, "r") as fin:
         done = False
         pool = Pool(40)

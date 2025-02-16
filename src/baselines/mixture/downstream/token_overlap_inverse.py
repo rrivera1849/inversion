@@ -14,7 +14,7 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-AUTHOR_DATA_PATH = "/data1/yubnub/data/iur_dataset/author_100.politics"
+AUTHOR_DATA_PATH = "/data1/foobar/data/iur_dataset/author_100.politics"
 TOKENIZER = AutoTokenizer.from_pretrained("roberta-large")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

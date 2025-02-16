@@ -20,14 +20,14 @@ parser.add_argument("--nval", type=int, default=25_000,
                     help="Number of validation examples to use.")
 
 parser.add_argument("--savedir", type=str, 
-                    default="/data1/yubnub/changepoint/s2orc_changepoint/base",
+                    default="/data1/foobar/changepoint/s2orc_changepoint/base",
                     help="Path to the directory where the dataset will be saved.")
 parser.add_argument("--metadata_file", type=str,
                     default=None,
                     help="Path to the metadata file where the indices are stored.")
 
 parser.add_argument("--cache_dir", type=str, 
-                    default="/data1/yubnub/changepoint/allenai/peS2o/",
+                    default="/data1/foobar/changepoint/allenai/peS2o/",
                     help="Path to the HuggingFace datasets cache directory.")
 args = parser.parse_args()
 

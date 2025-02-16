@@ -7,7 +7,7 @@ import editdistance
 import matplotlib.pyplot as plt
 import numpy as np
 
-DATA_PATH = "/data1/yubnub/changepoint/MUD_inverse/data"
+DATA_PATH = "/data1/foobar/changepoint/MUD_inverse/data"
 
 def main():
     dataset_name = "data.jsonl.filtered.respond_reddit.cleaned"

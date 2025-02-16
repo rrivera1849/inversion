@@ -43,7 +43,7 @@ def read_data(path: str):
     if "author_id" not in df.columns:
         # This is all very unfortunate, but I forgot to save the `author_id` in the 
         # small test set I saved, here we are recovering it:
-        path_test_full = f"/data1/yubnub/changepoint/MUD_inverse/data/{args.dataset_name}/test.jsonl"
+        path_test_full = f"/data1/foobar/changepoint/MUD_inverse/data/{args.dataset_name}/test.jsonl"
         df_test_full = pd.read_json(path_test_full, lines=True)
         if "baseline" in args.filename:
             model_name = args.filename.split("_")[1]
@@ -244,7 +244,7 @@ def calculate_all(
 if __name__ == "__main__":
     metric_dir = "./metrics/new"
     os.makedirs(metric_dir, exist_ok=True)
-    base_path = "/data1/yubnub/changepoint/MUD_inverse/data"
+    base_path = "/data1/foobar/changepoint/MUD_inverse/data"
     filename = os.path.join(base_path, args.dataset_name, "inverse_output", args.filename)
 
     if "plagiarism" in args.mode:

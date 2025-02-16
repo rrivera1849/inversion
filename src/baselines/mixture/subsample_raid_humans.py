@@ -4,7 +4,7 @@ import os
 import pandas as pd
 
 RAID_HUMAN_PATH = "/home/riverasoto1/repos/raid/data/train_human.jsonl"
-DATA_DIR = "/data1/yubnub/changepoint/MUD_inverse/data/"
+DATA_DIR = "/data1/foobar/changepoint/MUD_inverse/data/"
 
 raid_human = pd.read_json(RAID_HUMAN_PATH, lines=True)
 
